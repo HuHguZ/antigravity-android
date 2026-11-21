@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.util.Size
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -62,6 +64,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -131,6 +134,24 @@ fun PhoneAssistantScreen(
     var storageSummary by remember { mutableStateOf<PhoneStorageSummaryInfo?>(null) }
     var selectedItemForMenu by remember { mutableStateOf<PhoneSearchResultItem?>(null) }
     var statusToastText by remember { mutableStateOf("") }
+    var importingProject by remember { mutableStateOf(false) }
+    val projectImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) coroutineScope.launch {
+            importingProject = true
+            try {
+                val name = withContext(Dispatchers.IO) { viewModel.phoneController.importPhoneProjectArchive(uri) }
+                statusToastText = "Проект «$name» импортирован. Укажите его имя в чате."
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: IllegalArgumentException) {
+                statusToastText = failure.message ?: "Этот ZIP не удалось импортировать."
+            } catch (_: Exception) {
+                statusToastText = "Не удалось импортировать ZIP. Проверьте архив и свободное место."
+            } finally {
+                importingProject = false
+            }
+        }
+    }
 
     // Первичная загрузка сводки по памяти и недавних файлов в фоне
     LaunchedEffect(Unit) {
@@ -194,6 +215,9 @@ fun PhoneAssistantScreen(
         ReferencePageHeader("Файлы телефона", navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
         }, actions = {
+            TextButton(enabled = !importingProject, onClick = {
+                projectImporter.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+            }) { Text(if (importingProject) "Импорт…" else "Импорт ZIP") }
             IconButton(onClick = {
                 val (visiblePrompt, hiddenCtx) = buildAiContextPrompt(searchQuery, activeItems, viewModel.phoneController)
                 viewModel.sendUserPrompt(rawPrompt = visiblePrompt, viaVoice = false, hiddenPhoneContext = hiddenCtx)

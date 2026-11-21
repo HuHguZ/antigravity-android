@@ -163,6 +163,23 @@ class PhoneResourceController(private val context: Context) {
         }
     }
 
+    private val phoneProjectActions by lazy {
+        PhoneProjectActions(context, File(appSandboxWorkspace, "projects"), ::readFileForAgent)
+    }
+
+    fun importPhoneProjectArchive(uri: Uri): String = phoneProjectActions.importZip(uri)
+
+    suspend fun executePhoneAgentAction(obj: JSONObject): PhoneActionExecutionResult? {
+        if (!obj.optString("action").trim().equals("test_web_project", ignoreCase = true)) {
+            return executeSinglePhoneActionObject(obj)
+        }
+        if (!aiPermissions.phoneFileSystemAccess || !aiPermissions.phoneVirtualSandboxAccess) {
+            return PhoneActionExecutionResult("test_web_project", "", false, "Тестирование проекта выключено",
+                "В настройках «Доступ ИИ» разрешите доступ к файлам телефона и виртуальной песочнице.")
+        }
+        return phoneProjectActions.testWeb(obj)
+    }
+
     val publicDownloadDir: File
         get() = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
 
@@ -2630,7 +2647,7 @@ class PhoneResourceController(private val context: Context) {
         val dst = obj.optString("destination", "")
         val append = obj.optBoolean("append", false)
 
-        if (action in setOf("create_file", "write_file", "edit_file", "patch_file", "append_file", "delete_file", "move_file", "copy_file", "read_file", "list_dir", "ls", "search_files") &&
+        if ((action in PhoneProjectActions.names || action in setOf("create_file", "write_file", "edit_file", "patch_file", "append_file", "delete_file", "move_file", "copy_file", "read_file", "list_dir", "ls", "search_files")) &&
             !aiPermissions.phoneFileSystemAccess
         ) {
             return PhoneActionExecutionResult(
@@ -2641,6 +2658,8 @@ class PhoneResourceController(private val context: Context) {
                 outputOrDiff = ""
             )
         }
+
+        if (action in PhoneProjectActions.names) return phoneProjectActions.execute(action, obj)
 
         if (action in setOf("sandbox_create", "sandbox_init", "sandbox_write", "sandbox_exec", "sandbox_test", "sandbox_preview") &&
             !aiPermissions.phoneVirtualSandboxAccess
@@ -2692,13 +2711,22 @@ class PhoneResourceController(private val context: Context) {
             "search_contacts", "contacts" -> searchContactsOnPhone(query.ifEmpty { path })
             "share" -> shareFileOrTextAction(path = path, text = content.ifEmpty { query })
             "shell", "run_shell", "android_cli" -> {
-                val cliRes = executeAndroidCliCommand(cmd.ifEmpty { path })
+                val project = obj.optString("project").trim()
+                if (project.isNotEmpty() && !aiPermissions.phoneFileSystemAccess) {
+                    return PhoneActionExecutionResult("android_cli", "", false, "Доступ к файлам телефона выключен", "")
+                }
+                val directory = if (project.isEmpty()) appSandboxWorkspace else try {
+                    openPhoneProject(File(appSandboxWorkspace, "projects"), project)
+                } catch (failure: IllegalArgumentException) {
+                    return PhoneActionExecutionResult("android_cli", "", false, "Не удалось открыть проект", failure.message.orEmpty())
+                }
+                val cliRes = executeAndroidCliCommand(cmd.ifEmpty { path }, directory)
                 PhoneActionExecutionResult(
                     actionType = "android_cli",
                     targetPathOrCmd = cliRes.command,
                     success = cliRes.exitCode == 0,
                     summaryRu = "Android CLI: ${cliRes.command.take(48)} (код ${cliRes.exitCode}, ${cliRes.durationMs} мс)",
-                    outputOrDiff = cliRes.output
+                    outputOrDiff = "Код возврата: ${cliRes.exitCode}\n${cliRes.output}"
                 )
             }
             "sandbox_create", "sandbox_init" -> {

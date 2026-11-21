@@ -18,4 +18,15 @@ class PhoneModelRouteTest {
         assertEquals(PhoneModelRoute.GEMINI_API, phoneModelRoute("gemini-4-neon"))
         assertEquals(PhoneModelRoute.OPENROUTER_API, phoneModelRoute("google/gemini-2.5-pro"))
     }
+
+    @Test fun unavailableBridgeFallsBackOnlyWithMatchingDirectCredentials() {
+        val pc = AgentExecutionTarget.PC_REMOTE_SESSION
+        val phone = AgentExecutionTarget.PHONE_LOCAL_RESOURCES
+        val particle = "particle-ai/particle-1:free"
+        assertEquals(phone, phoneFallbackTarget(pc, true, particle, "", "router"))
+        assertEquals(phone, phoneFallbackTarget(pc, true, "models/gemini-2.5-pro", "gemini", ""))
+        assertEquals(pc, phoneFallbackTarget(pc, false, particle, "", "router"))
+        assertEquals(pc, phoneFallbackTarget(pc, true, particle, "gemini", " "))
+        assertEquals(pc, phoneFallbackTarget(pc, true, "gemini-4-argon-high", "gemini", "router"))
+    }
 }

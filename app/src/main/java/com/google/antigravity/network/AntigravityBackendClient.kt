@@ -29,6 +29,7 @@ import com.google.antigravity.model.OpenRouterModelItem
 import com.google.antigravity.model.PcMcpServerItem
 import com.google.antigravity.model.PcSkillItem
 import com.google.antigravity.model.PhoneModelRoute
+import com.google.antigravity.model.phoneFallbackTarget
 import com.google.antigravity.model.phoneModelRoute
 import com.google.antigravity.model.ProjectWorkspace
 import com.google.antigravity.model.ProjectWorkspaces
@@ -2099,6 +2100,7 @@ class AntigravityBackendClient(
         transientChat: Boolean = false,
         /** Этап 6: выбор подключений MCP в разговоре (пусто — все включённые). */
         mcpConnections: List<String> = emptyList(),
+        onPhoneFallback: suspend () -> Unit = {},
         onStreamingUpdate: suspend (StreamingTurnUpdate) -> Unit = {}
     ): AgentTurnResult = withContext(Dispatchers.IO) {
         val turnStartMs = System.currentTimeMillis()
@@ -2209,6 +2211,13 @@ class AntigravityBackendClient(
             )
 
             if (stepBridgeResp == null) {
+                val noRemoteWork = !anyStepSucceeded && uploadedAttachments.none { it.pcUploadedPath.isNotBlank() }
+                if (phoneFallbackTarget(executionTarget, noRemoteWork, selectedModelId, geminiApiKey, openRouterApiKey) ==
+                    AgentExecutionTarget.PHONE_LOCAL_RESOURCES) {
+                    onPhoneFallback()
+                    return@withContext executePhoneTurn(userPrompt, selectedModelId, activeConversationId,
+                        attachments, sessionHistory, geminiApiKey, openRouterApiKey, extraPhoneContext, pcBridgeUrl, onStreamingUpdate)
+                }
                 break
             }
 
@@ -2404,41 +2413,7 @@ class AntigravityBackendClient(
             }
         }
 
-        // Direct OpenRouter API fallback if an OpenRouter model is selected and user provided an OpenRouter API key
         val directRoute = phoneModelRoute(selectedModelId)
-        if (directRoute == PhoneModelRoute.OPENROUTER_API && openRouterApiKey.isNotBlank()) {
-            val orResult = callDirectOpenRouterApi(
-                cleanPrompt = cleanPrompt,
-                openRouterApiKey = openRouterApiKey,
-                sessionHistory = sessionHistory,
-                selectedModelId = selectedModelId,
-                activeConversationId = activeConversationId,
-                turnStartMs = turnStartMs,
-                allToolCalls = allToolCalls,
-                createdDiffs = createdDiffs,
-                onStreamingUpdate = onStreamingUpdate
-            )
-            if (orResult != null) return@withContext orResult
-        }
-
-        // Fallback ONLY if user explicitly configured a direct Gemini API key in Settings
-        if (directRoute == PhoneModelRoute.GEMINI_API && geminiApiKey.isNotBlank()) {
-            val geminiResult = executeDirectGeminiLoop(
-                cleanPrompt = cleanPrompt,
-                geminiApiKey = geminiApiKey,
-                sessionHistory = sessionHistory,
-                selectedModelId = selectedModelId,
-                isPhoneMode = isPhoneMode,
-                basePhoneTelemetry = basePhoneTelemetry,
-                activeConversationId = activeConversationId,
-                turnStartMs = turnStartMs,
-                allToolCalls = allToolCalls,
-                createdDiffs = createdDiffs,
-                onStreamingUpdate = onStreamingUpdate
-            )
-            if (geminiResult != null) return@withContext geminiResult
-        }
-
         // Honest Offline / Bridge Down message (Scenario G — zero fake template responses!)
         val honestError = when {
             directRoute == PhoneModelRoute.PC_CLI ->
@@ -2481,6 +2456,7 @@ class AntigravityBackendClient(
             responseMarkdown = unavailable, spokenSummaryRu = unavailable, updatedConversationId = conversationId, isError = true)
         val start = System.currentTimeMillis()
         val reasoning = PhoneReasoningAccumulator()
+        var outputTokens = 0
         fun reasoningSeconds() = if (reasoning.text.isBlank()) 0 else
             ((System.currentTimeMillis() - start) / 1000L).toInt().coerceAtLeast(1)
         suspend fun publishReasoning(summary: String, child: Boolean) {
@@ -2516,12 +2492,13 @@ class AntigravityBackendClient(
                     if (response.isError) throw java.io.IOException("Модель завершила запрос с ошибкой. Проверьте подключение и повторите запрос.")
                     response.reply
                 } else if (route == com.google.antigravity.model.PhoneModelRoute.OPENROUTER_API) {
-                    val response = callDirectOpenRouterApi(request, routerKey, modelHistory, modelId, conversationId,
-                        start, mutableListOf(), mutableListOf(),
-                        onStreamingUpdate = { publishReasoning(it.thinking, child) },
-                        systemPrompt = OPENROUTER_PHONE_SYSTEM_PROMPT)
-                        ?: throw java.io.IOException("OpenRouter не вернул ответ. Проверьте ключ, модель и соединение.")
-                    response.responseMarkdown
+                    val response = callDirectOpenRouterApi(request, routerKey, modelHistory, modelId) {
+                        publishReasoning(it, child)
+                    }
+                    val (answer, taggedThinking) = extractClientSideThinking(response.text)
+                    publishReasoning(response.reasoning.ifBlank { taggedThinking }, child)
+                    if (!child) outputTokens = response.outputTokens
+                    answer
                 } else {
                     val raw = callGeminiRestApi(request, loadAssetSystemPrompt(), geminiKey, modelId, modelHistory)
                     val (answer, taggedThinking) = extractClientSideThinking(raw.text)
@@ -2532,7 +2509,7 @@ class AntigravityBackendClient(
                 answer
             },
             execute = { obj ->
-                val action = phoneController.executeSinglePhoneActionObject(obj)
+                val action = phoneController.executePhoneAgentAction(obj)
                 if (action == null) com.google.antigravity.model.PhoneToolOutput(false, "Инструмент", "Неизвестное действие телефона")
                 else com.google.antigravity.model.PhoneToolOutput(action.success, action.summaryRu,
                     action.outputOrDiff.ifBlank { action.targetPathOrCmd })
@@ -2546,11 +2523,12 @@ class AntigravityBackendClient(
             if (context.isNotBlank()) appendLine("Контекст пользователя:\n$context")
             if (attachedContext.isNotBlank()) appendLine("Текст вложений:\n$attachedContext")
         })
+        val markdown = sanitizeStoragePathsInMarkdown(reply.text, prompt)
         update(StreamingTurnUpdate(thinking = reasoning.text, thinkingDurationSec = reasoningSeconds(), textDelta = "",
-            fullText = reply.text, toolCalls = reply.tools, isDone = true))
-        return AgentTurnResult(thinkingTrace = reasoning.text, thinkingDurationSec = reasoningSeconds(), responseMarkdown = reply.text,
-            spokenSummaryRu = sanitizeSpokenSummary(reply.text), updatedConversationId = conversationId,
-            toolCalls = reply.tools, isError = !reply.completed)
+            fullText = markdown, toolCalls = reply.tools, outputTokensCount = outputTokens, isDone = true))
+        return AgentTurnResult(thinkingTrace = reasoning.text, thinkingDurationSec = reasoningSeconds(), responseMarkdown = markdown,
+            spokenSummaryRu = sanitizeSpokenSummary(markdown), updatedConversationId = conversationId,
+            toolCalls = reply.tools, outputTokensCount = outputTokens, isError = !reply.completed)
     }
 
     private suspend fun callDirectOpenRouterApi(
@@ -2558,130 +2536,18 @@ class AntigravityBackendClient(
         openRouterApiKey: String,
         sessionHistory: List<ChatMessage>,
         selectedModelId: String,
-        activeConversationId: String,
-        turnStartMs: Long,
-        allToolCalls: MutableList<ToolCallEvent>,
-        createdDiffs: MutableList<FileDiffItem>,
-        onStreamingUpdate: suspend (StreamingTurnUpdate) -> Unit,
-        systemPrompt: String = loadAssetSystemPrompt()
-    ): AgentTurnResult? {
-        val cleanModel = selectedModelId.trim()
+        onReasoning: suspend (String) -> Unit
+    ): OpenRouterChatReply {
         val messages = JSONArray().apply {
-            put(JSONObject().put("role", "system").put("content", systemPrompt))
+            put(JSONObject().put("role", "system").put("content", OPENROUTER_PHONE_SYSTEM_PROMPT))
             sessionHistory.forEach { message ->
                 put(JSONObject().put("role", if (message.role == MessageRole.USER) "user" else "assistant")
                     .put("content", message.content))
             }
             put(JSONObject().put("role", "user").put("content", cleanPrompt))
         }
-        val response = DirectOpenRouterChatClient(directChatTransport ?: httpClient)
-            .complete(cleanModel, openRouterApiKey, messages, onReasoning = { snapshot ->
-                val elapsed = ((System.currentTimeMillis() - turnStartMs) / 1000L).toInt().coerceAtLeast(1)
-                onStreamingUpdate(StreamingTurnUpdate(thinking = snapshot, thinkingDurationSec = elapsed,
-                    toolCalls = allToolCalls.toList(), textDelta = "", fullText = "", isDone = false))
-            })
-        val (text, taggedThinking) = extractClientSideThinking(response.text)
-        val thinking = response.reasoning.ifBlank { taggedThinking }
-        val markdown = sanitizeStoragePathsInMarkdown(text, cleanPrompt)
-        val seconds = ((System.currentTimeMillis() - turnStartMs) / 1000L).toInt().coerceAtLeast(1)
-        onStreamingUpdate(StreamingTurnUpdate(thinking = thinking,
-            thinkingDurationSec = if (thinking.isBlank()) 0 else seconds, toolCalls = allToolCalls.toList(),
-            textDelta = markdown, fullText = markdown, createdDiffs = createdDiffs.toList(), isDone = true,
-            outputTokensCount = response.outputTokens))
-        return AgentTurnResult(thinkingTrace = thinking, thinkingDurationSec = if (thinking.isBlank()) 0 else seconds,
-            responseMarkdown = markdown, spokenSummaryRu = sanitizeSpokenSummary(markdown),
-            updatedConversationId = activeConversationId, toolCalls = allToolCalls, createdDiffs = createdDiffs,
-            outputTokensCount = response.outputTokens)
-    }
-
-    private suspend fun executeDirectGeminiLoop(
-        cleanPrompt: String,
-        geminiApiKey: String,
-        sessionHistory: List<ChatMessage>,
-        selectedModelId: String,
-        isPhoneMode: Boolean,
-        basePhoneTelemetry: String,
-        activeConversationId: String,
-        turnStartMs: Long,
-        allToolCalls: MutableList<ToolCallEvent>,
-        createdDiffs: MutableList<FileDiffItem>,
-        onStreamingUpdate: suspend (StreamingTurnUpdate) -> Unit
-    ): AgentTurnResult? {
-        val observations = StringBuilder()
-        val thinkingAcc = StringBuilder()
-        val maxSteps = if (isPhoneMode) 4 else 1
-        val unifiedSysPrompt = loadAssetSystemPrompt()
-
-        for (step in 0 until maxSteps) {
-            val promptWithContext = buildString {
-                if (isPhoneMode) {
-                    appendLine("Доступные инструменты смартфона (вызывай по одному в блоке ```phone_action {\"action\":\"...\"} ```):")
-                    appendLine("- search_files (query, extension, contentQuery, folder)")
-                    appendLine("- search_media (query, mediaType, dateFilter)")
-                    appendLine("- read_file (path)")
-                    appendLine("- write_file (path, content, append)")
-                    appendLine("- patch_file (path, target, replacement)")
-                    appendLine("- list_dir (path)")
-                    appendLine("- open_app (query)")
-                    appendLine("- contacts (query)")
-                    appendLine("- share (path, content)")
-                    appendLine("Телеметрия устройства:\n$basePhoneTelemetry")
-                }
-                appendLine("\nЗапрос пользователя: $cleanPrompt")
-                if (observations.isNotEmpty()) {
-                    appendLine("\nРезультаты выполненных шагов:\n$observations")
-                    appendLine("\nПродолжи выполнение или дай итоговый ответ.")
-                }
-            }
-            val rawReply = callGeminiRestApi(promptWithContext, unifiedSysPrompt, geminiApiKey, selectedModelId, sessionHistory)
-            val (withoutThink, taggedThink) = extractClientSideThinking(rawReply.text)
-            val inlineThink = rawReply.thinking.ifBlank { taggedThink }
-            if (inlineThink.isNotBlank()) {
-                if (thinkingAcc.isNotEmpty()) thinkingAcc.append("\n\n")
-                thinkingAcc.append(inlineThink)
-            }
-            val (cleaned, actions) = phoneController.extractAndExecuteAiPhoneActions(withoutThink)
-            if (actions.isNotEmpty() && step + 1 < maxSteps) {
-                for (act in actions) {
-                    allToolCalls.add(
-                        ToolCallEvent(
-                            toolName = act.actionType,
-                            summary = act.summaryRu,
-                            details = act.outputOrDiff.ifBlank { act.targetPathOrCmd },
-                            status = if (act.success) ToolCallStatus.COMPLETED else ToolCallStatus.FAILED,
-                            durationMs = 50L
-                        )
-                    )
-                    observations.appendLine("Инструмент ${act.actionType}: ${act.summaryRu}\nВывод:\n${act.outputOrDiff}")
-                }
-                onStreamingUpdate(
-                    StreamingTurnUpdate(
-                        thinking = thinkingAcc.toString(),
-                        thinkingDurationSec = ((System.currentTimeMillis() - turnStartMs) / 1000L).toInt().coerceAtLeast(1),
-                        toolCalls = allToolCalls.toList(),
-                        textDelta = "",
-                        fullText = cleaned,
-                        createdDiffs = createdDiffs.toList(),
-                        isDone = false
-                    )
-                )
-                continue
-            } else {
-                val finalMd = sanitizeStoragePathsInMarkdown(cleaned.ifBlank { withoutThink }, cleanPrompt)
-                val elapsed = ((System.currentTimeMillis() - turnStartMs) / 1000L).toInt().coerceAtLeast(1)
-                val finalThink = thinkingAcc.toString().trim()
-                return AgentTurnResult(
-                    thinkingTrace = finalThink,
-                    thinkingDurationSec = if (finalThink.isNotBlank()) elapsed else 0,
-                    responseMarkdown = finalMd,
-                    spokenSummaryRu = sanitizeSpokenSummary(finalMd),
-                    updatedConversationId = activeConversationId,
-                    toolCalls = allToolCalls,
-                    createdDiffs = createdDiffs
-                )
-            }
-        }
-        return null
+        return DirectOpenRouterChatClient(directChatTransport ?: httpClient)
+            .complete(selectedModelId, openRouterApiKey, messages, onReasoning)
     }
 
     private suspend fun pollTurnUntilComplete(
@@ -2881,7 +2747,7 @@ class AntigravityBackendClient(
             var finalThinkingSec = 0
             var receivedDoneEvent = false
             var terminalFailed = false
-            var receivedAnyEvent = false
+            var receivedSuccessfulResponse = false
             val streamTools = mutableListOf<ToolCallEvent>()
             val streamDiffs = mutableListOf<FileDiffItem>()
             val streamMedia = mutableListOf<GeneratedMediaAttachment>()
@@ -2898,6 +2764,7 @@ class AntigravityBackendClient(
                 activeRemoteTurn.set(base to clientTurnId)
                 val success = clientForUrl(base).newCall(req).useCancellable { resp ->
                     if (!resp.isSuccessful) return@useCancellable false
+                    receivedSuccessfulResponse = true
                     val reader: BufferedReader = resp.body?.charStream()?.buffered() ?: return@useCancellable false
                     var line: String?
                     while (true) {
@@ -2911,7 +2778,6 @@ class AntigravityBackendClient(
                             if (failure is kotlinx.coroutines.CancellationException) throw failure;
                             continue
                         }
-                        receivedAnyEvent = true
                         when (ev.optString("type", "")) {
                             "init" -> {
                                 val tid = ev.optString("turnId", "")
@@ -3090,7 +2956,7 @@ class AntigravityBackendClient(
                 }
 
                 // If stream closed before "done" after connection started, seamlessly recover via /api/chat/turn-status
-                if (!receivedDoneEvent && (receivedAnyEvent || streamTools.isNotEmpty() || liveThinking.isNotBlank())) {
+                if (!receivedDoneEvent && receivedSuccessfulResponse) {
                     val polled = pollTurnUntilComplete(
                         base = base,
                         turnId = activeTurnId,
@@ -3112,7 +2978,7 @@ class AntigravityBackendClient(
             } catch (failure: Throwable) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure;
                 // Mid-turn SSE disconnect recovery: if we already received events/tools on this turn, poll until completion!
-                if (!receivedDoneEvent && (receivedAnyEvent || streamTools.isNotEmpty() || liveThinking.isNotBlank())) {
+                if (!receivedDoneEvent && receivedSuccessfulResponse) {
                     val polled = pollTurnUntilComplete(
                         base = base,
                         turnId = activeTurnId,
@@ -3133,6 +2999,20 @@ class AntigravityBackendClient(
                     lastWorkingBridgeUrl = ""
                 }
             }
+            if (receivedSuccessfulResponse) {
+                val error = "Не удалось подтвердить результат на ПК. Проверьте сессию перед повтором запроса."
+                return PcBridgeChatResponse(
+                    reply = previousVisibleText.trim().takeIf { it.isNotBlank() }?.let { "$it\n\n$error" } ?: error,
+                    conversationId = returnedConvId,
+                    thinking = liveThinking.trim(),
+                    toolCalls = streamTools,
+                    createdDiffs = streamDiffs,
+                    generatedMedia = streamMedia,
+                    resolvedBaseUrl = base,
+                    isError = true
+                )
+            }
+            activeRemoteTurn.compareAndSet(activeRemoteTurn.get()?.takeIf { it.second == clientTurnId }, null)
         }
         return null
     }

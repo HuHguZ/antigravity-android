@@ -155,7 +155,7 @@ class PhoneAgentEngineTest {
         var calls = 0
         val engine = PhoneAgentEngine(model = { prompt, child ->
             assertFalse(child)
-            assertTrue(prompt.contains("android_cli(command)"))
+            assertTrue(prompt.contains("android_cli(command,project)"))
             assertTrue(prompt.contains("sandbox_test(sandboxId)"))
             if (calls++ == 0) "```phone_action {\"action\":\"android_cli\",\"command\":\"pwd\"} ```"
             else { assertTrue(prompt.contains("/real/android/workspace")); "Рабочая папка получена" }

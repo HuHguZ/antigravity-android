@@ -842,6 +842,15 @@ fun humanizeToolNameRu(rawToolName: String): String {
     val normalized = rawToolName.trim().lowercase()
     return when {
         normalized == "delegate_task" -> "Делегирование"
+        normalized == "create_project" -> "Создание проекта"
+        normalized == "create_presentation" -> "Создание презентации"
+        normalized == "export_project" -> "Экспорт проекта в ZIP"
+        normalized == "preview_project" -> "Превью проекта в браузере"
+        normalized == "check_project" -> "Проверка файлов проекта"
+        normalized == "test_web_project" -> "Тест проекта в браузере"
+        normalized == "list_project_files" -> "Список файлов проекта"
+        normalized == "read_project_file" -> "Чтение файла проекта"
+        normalized == "write_project_file" || normalized == "patch_project_file" -> "Запись файла проекта"
         normalized.contains("create_file") || normalized.contains("write_file") || normalized.contains("write_to_file") -> "Создание файла"
         normalized.contains("patch_file") || normalized.contains("edit_file") || normalized.contains("replace_file") || normalized.contains("modify") -> "Точечное изменение файла"
         normalized.contains("append_file") -> "Дозапись в файл"
