@@ -212,6 +212,59 @@ def patch_gemini(decoded):
     replace_once(backend, '    const-string v0, "gemini-2.5-flash"', '    const-string v0, "gemini-4-hydrogen"')
 
 
+def patch_cloud_subscription(decoded):
+    sheet = decoded / (
+        "smali/com/google/antigravity/ui/components/ConversationModelSheetKt$ConversationModelSheet$1$1$1$1.smali"
+    )
+    replace_once(sheet, r'    const-string v6, "\u0412\u0435\u0431"', '    const-string v6, "Облако Pro"')
+    view_model = decoded / "smali_classes4/com/google/antigravity/viewmodel/AntigravityViewModel.smali"
+    cls = "Lcom/google/antigravity/viewmodel/AntigravityViewModel;"
+    target = "Lcom/google/antigravity/model/AgentExecutionTarget;"
+    replace_once(view_model, "    .line 2479\n    iget-object v1, v0,",
+                 f"""    sget-object v1, {target}->GOOGLE_WEB_CONSOLE:{target}
+    if-ne v3, v1, :local_target
+    invoke-direct {{v0}}, {cls}->openAntigravityCloud()V
+    return-void
+
+    :local_target
+    .line 2479
+    iget-object v1, v0,""")
+    with view_model.open("a", encoding="utf-8") as out:
+        out.write(f'''
+.method private openAntigravityCloud()V
+    .locals 4
+    invoke-virtual {{p0}}, {cls}->getApplication()Landroid/app/Application;
+    move-result-object v0
+
+    new-instance v1, Landroid/content/Intent;
+    const-string v2, "android.intent.action.VIEW"
+    const-string v3, "https://antigravity.google.com/"
+    invoke-static {{v3}}, Landroid/net/Uri;->parse(Ljava/lang/String;)Landroid/net/Uri;
+    move-result-object v3
+    invoke-direct {{v1, v2, v3}}, Landroid/content/Intent;-><init>(Ljava/lang/String;Landroid/net/Uri;)V
+    const-string v2, "android.intent.category.BROWSABLE"
+    invoke-virtual {{v1, v2}}, Landroid/content/Intent;->addCategory(Ljava/lang/String;)Landroid/content/Intent;
+    const/high16 v2, 0x10000000
+    invoke-virtual {{v1, v2}}, Landroid/content/Intent;->addFlags(I)Landroid/content/Intent;
+
+    :open_start
+    invoke-virtual {{v0, v1}}, Landroid/app/Application;->startActivity(Landroid/content/Intent;)V
+    :open_end
+    .catch Landroid/content/ActivityNotFoundException; {{:open_start .. :open_end}} :no_browser
+    return-void
+
+    :no_browser
+    move-exception v1
+    const-string v1, "Для открытия Antigravity нужен браузер"
+    const/4 v2, 0x1
+    invoke-static {{v0, v1, v2}}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
+    move-result-object v1
+    invoke-virtual {{v1}}, Landroid/widget/Toast;->show()V
+    return-void
+.end method
+''')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
@@ -249,6 +302,7 @@ def main():
         patch_layout(decoded / "smali/com/google/antigravity/ui/components")
         patch_openrouter(decoded / "smali_classes2/com/google/antigravity/network")
         patch_gemini(decoded)
+        patch_cloud_subscription(decoded)
         rebuilt = work / "rebuilt.apk"
         run(args.java, "-jar", args.apktool, "b", "-j", "2", "-o", rebuilt, decoded)
 

@@ -1,12 +1,14 @@
 package com.google.antigravity.viewmodel
 
 import android.app.Application
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.antigravity.device.PhoneResourceController
@@ -1588,10 +1590,19 @@ class AntigravityViewModel internal constructor(application: Application,
     }
 
     fun setExecutionTarget(target: AgentExecutionTarget) {
-        _settings.update { it.copy(executionTarget = target) }
         if (target == AgentExecutionTarget.GOOGLE_WEB_CONSOLE) {
-            _drawerSection.value = DrawerSection.GOOGLE_WEB
+            val app = getApplication<Application>()
+            val browser = Intent(Intent.ACTION_VIEW, Uri.parse("https://antigravity.google.com/"))
+                .addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                app.startActivity(browser)
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(app, "Для открытия Antigravity нужен браузер", Toast.LENGTH_LONG).show()
+            }
+            return
         }
+        prefs.edit().putString("active_execution_target", target.name).apply()
+        _settings.update { it.copy(executionTarget = target) }
     }
 
     fun setSelectedModel(modelId: String) {

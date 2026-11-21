@@ -44,11 +44,13 @@ fun ConversationModelSheet(
                 Column(Modifier.selectableGroup()) {
                     listOf(
                         AgentExecutionTarget.PC_REMOTE_SESSION to "Сессия ПК",
-                        AgentExecutionTarget.PHONE_LOCAL_RESOURCES to "Телефон",
-                        AgentExecutionTarget.GOOGLE_WEB_CONSOLE to "Веб-консоль"
+                        AgentExecutionTarget.PHONE_LOCAL_RESOURCES to "Телефон"
                     ).forEach { (target, label) ->
                         ModelChoice(label, "", settings.executionTarget == target) { onSelectTarget(target) }
                     }
+                }
+                TextButton(onClick = { onSelectTarget(AgentExecutionTarget.GOOGLE_WEB_CONSOLE) }) {
+                    Text("Облако Pro · без ПК")
                 }
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DesignColors.Border)
                 ModelSectionLabel("Модель")
