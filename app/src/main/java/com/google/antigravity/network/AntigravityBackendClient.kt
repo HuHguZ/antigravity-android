@@ -2521,7 +2521,6 @@ class AntigravityBackendClient(
                         onStreamingUpdate = { publishReasoning(it.thinking, child) },
                         systemPrompt = OPENROUTER_PHONE_SYSTEM_PROMPT)
                         ?: throw java.io.IOException("OpenRouter не вернул ответ. Проверьте ключ, модель и соединение.")
-                    publishReasoning(response.thinkingTrace, child)
                     response.responseMarkdown
                 } else {
                     val raw = callGeminiRestApi(request, loadAssetSystemPrompt(), geminiKey, modelId, modelHistory)
@@ -2575,7 +2574,12 @@ class AntigravityBackendClient(
             }
             put(JSONObject().put("role", "user").put("content", cleanPrompt))
         }
-        val response = DirectOpenRouterChatClient(directChatTransport ?: httpClient).complete(cleanModel, openRouterApiKey, messages)
+        val response = DirectOpenRouterChatClient(directChatTransport ?: httpClient)
+            .complete(cleanModel, openRouterApiKey, messages, onReasoning = { snapshot ->
+                val elapsed = ((System.currentTimeMillis() - turnStartMs) / 1000L).toInt().coerceAtLeast(1)
+                onStreamingUpdate(StreamingTurnUpdate(thinking = snapshot, thinkingDurationSec = elapsed,
+                    toolCalls = allToolCalls.toList(), textDelta = "", fullText = "", isDone = false))
+            })
         val (text, taggedThinking) = extractClientSideThinking(response.text)
         val thinking = response.reasoning.ifBlank { taggedThinking }
         val markdown = sanitizeStoragePathsInMarkdown(text, cleanPrompt)

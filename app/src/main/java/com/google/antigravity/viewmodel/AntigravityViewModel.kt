@@ -4007,6 +4007,7 @@ class AntigravityViewModel internal constructor(application: Application,
                             val stepDesc = when {
                                 update.toolCalls.isNotEmpty() -> "Инструмент: ${update.toolCalls.last().summary}"
                                 update.fullText.isNotBlank() -> "Генерация ответа (${update.fullText.length} симв.)"
+                                update.thinking.isNotBlank() -> "Ход рассуждений"
                                 else -> "Ожидание ответа…"
                             }
                             AntigravityAgentSessionService.updateAgentTurnProgress(

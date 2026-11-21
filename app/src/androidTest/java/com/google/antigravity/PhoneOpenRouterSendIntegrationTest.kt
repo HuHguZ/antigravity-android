@@ -9,6 +9,7 @@ import com.google.antigravity.network.AntigravityBackendClient
 import com.google.antigravity.network.OpenRouterChatFailure
 import kotlinx.coroutines.runBlocking
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -24,7 +25,9 @@ class PhoneOpenRouterSendIntegrationTest {
         model: String = "qa/text",
         providerFailure: Boolean = false,
         headers: Headers = Headers.Builder().build(),
-        unsupportedMarkupFirst: Boolean = false
+        unsupportedMarkupFirst: Boolean = false,
+        sse: String? = null,
+        onUpdate: suspend (AntigravityBackendClient.StreamingTurnUpdate) -> Unit = {}
     ): AntigravityBackendClient.AgentTurnResult {
         check(Build.HARDWARE in setOf("ranchu", "goldfish")) { "Owned QA emulator only" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -48,12 +51,12 @@ class PhoneOpenRouterSendIntegrationTest {
             val content = if (unsupportedMarkupFirst && requestIndex == 0) {
                 "<tool_call>\n<function=read_file>\n<parameter=path>\n/workspace/qa.md\n</parameter>\n</function>\n</tool_call>"
             } else "Телефон получил ответ без ПК."
-            val body = """{"choices":[{"message":{"content":${JSONObject.quote(content)},"reasoning":"QA `reasoning`"}$error}]}"""
+            val body = sse ?: """{"choices":[{"message":{"content":${JSONObject.quote(content)},"reasoning":"QA `reasoning`"}$error}]}"""
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("QA").headers(headers)
-                .body(body.toResponseBody()).build()
+                .body(body.toResponseBody(if (sse != null) "text/event-stream".toMediaType() else null)).build()
         }.build())
         return client.executeAgentTurn("Проверка", false, AgentExecutionTarget.PHONE_LOCAL_RESOURCES,
-            model, "qa-send", "QA", emptyList(), emptyList(), "http://127.0.0.1:1", "", key)
+            model, "qa-send", "QA", emptyList(), emptyList(), "http://127.0.0.1:1", "", key, onStreamingUpdate = onUpdate)
     }
 
     @Test fun phoneTextTurnWorksWithUnavailablePc() = runBlocking {
@@ -61,6 +64,26 @@ class PhoneOpenRouterSendIntegrationTest {
         assertFalse(result.isError)
         assertEquals("Телефон получил ответ без ПК.", result.responseMarkdown)
         assertTrue(result.thinkingTrace.contains("QA `reasoning`"))
+    }
+
+    @Test fun lengthFailureStillPublishesReasoningToThePhoneChat() = runBlocking {
+        val stream = """
+            data: {"choices":[{"delta":{"reasoning":"Проверяю план"}}]}
+
+            data: {"choices":[{"delta":{"reasoning":" выступления"},"finish_reason":"length"}]}
+
+            data: [DONE]
+        """.trimIndent()
+        val updates = mutableListOf<AntigravityBackendClient.StreamingTurnUpdate>()
+        try {
+            send(200, model = "particle-ai/particle-1:free", sse = stream, onUpdate = { updates.add(it) })
+            fail("Expected output-token limit")
+        } catch (error: OpenRouterChatFailure) {
+            assertTrue(error.message.orEmpty().contains("лимит ответа"))
+            assertTrue(updates.first().thinking.contains("Проверяю план"))
+            assertEquals("Проверяю план выступления", updates.last().thinking)
+            assertTrue(updates.none { it.isDone })
+        }
     }
 
     @Test fun freeRouterRecoversFromUnsupportedToolMarkup() = runBlocking {
