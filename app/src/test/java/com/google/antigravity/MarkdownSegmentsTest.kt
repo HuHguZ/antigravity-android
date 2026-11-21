@@ -1,6 +1,6 @@
 package com.google.antigravity
 
-import com.google.antigravity.ui.components.splitCodeAndProse
+import com.google.antigravity.model.splitCodeAndProse
 import org.junit.Assert.*
 import org.junit.Test
 

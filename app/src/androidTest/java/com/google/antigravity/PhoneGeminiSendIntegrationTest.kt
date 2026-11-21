@@ -67,4 +67,14 @@ class PhoneGeminiSendIntegrationTest {
             assertFalse(error.message.orEmpty().contains("private error body"))
         }
     }
+
+    @Test fun hydrogen503ReportsTheSelectedModelAndPreservesProviderStatus() = runBlocking {
+        try { send("gemini-4-hydrogen", "gemini-4-hydrogen", 503); fail("Expected HTTP 503") }
+        catch (error: GeminiChatFailure) {
+            assertEquals(503, error.status)
+            assertTrue(error.message.orEmpty().contains("gemini-4-hydrogen"))
+            assertTrue(error.message.orEmpty().contains("временно недоступна"))
+            assertFalse(error.message.orEmpty().contains("private error body"))
+        }
+    }
 }
