@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -216,7 +217,14 @@ def patch_cloud_subscription(decoded):
     sheet = decoded / (
         "smali/com/google/antigravity/ui/components/ConversationModelSheetKt$ConversationModelSheet$1$1$1$1.smali"
     )
+    replace_once(sheet, r'    const-string v6, "\u0422\u0435\u043b\u0435\u0444\u043e\u043d"',
+                 '    const-string v6, "Телефон · API"')
     replace_once(sheet, r'    const-string v6, "\u0412\u0435\u0431"', '    const-string v6, "Облако Pro"')
+    backend = decoded / "smali_classes2/com/google/antigravity/network/AntigravityBackendClient.smali"
+    old = "Для выбранной модели укажите ключ Gemini API. Режим телефона не требует PC-Bridge."
+    guidance = ("Для чата в режиме «Телефон · API» нужен ключ Gemini API.\n\n"
+                "[Открыть Antigravity с Google AI Pro](https://antigravity.google.com/)")
+    replace_once(backend, json.dumps(old), json.dumps(guidance, ensure_ascii=False))
     view_model = decoded / "smali_classes4/com/google/antigravity/viewmodel/AntigravityViewModel.smali"
     cls = "Lcom/google/antigravity/viewmodel/AntigravityViewModel;"
     target = "Lcom/google/antigravity/model/AgentExecutionTarget;"

@@ -2466,7 +2466,9 @@ class AntigravityBackendClient(
         val unavailable = when {
             modelId.isBlank() -> "Выберите API-модель для работы на телефоне."
             route == com.google.antigravity.model.PhoneModelRoute.OPENROUTER_API && routerKey.isBlank() -> "Для выбранной модели укажите ключ OpenRouter. Режим телефона не требует PC-Bridge."
-            route == com.google.antigravity.model.PhoneModelRoute.GEMINI_API && geminiKey.isBlank() -> "Для выбранной модели укажите ключ Gemini API. Режим телефона не требует PC-Bridge."
+            route == com.google.antigravity.model.PhoneModelRoute.GEMINI_API && geminiKey.isBlank() ->
+                "Для чата в режиме «Телефон · API» нужен ключ Gemini API.\n\n" +
+                    "[Открыть Antigravity с Google AI Pro](https://antigravity.google.com/)"
             else -> null
         }
         if (unavailable != null) return AgentTurnResult(thinkingTrace = "", thinkingDurationSec = 0,

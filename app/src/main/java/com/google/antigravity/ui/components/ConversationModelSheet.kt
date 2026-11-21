@@ -44,7 +44,7 @@ fun ConversationModelSheet(
                 Column(Modifier.selectableGroup()) {
                     listOf(
                         AgentExecutionTarget.PC_REMOTE_SESSION to "Сессия ПК",
-                        AgentExecutionTarget.PHONE_LOCAL_RESOURCES to "Телефон"
+                        AgentExecutionTarget.PHONE_LOCAL_RESOURCES to "Телефон · API"
                     ).forEach { (target, label) ->
                         ModelChoice(label, "", settings.executionTarget == target) { onSelectTarget(target) }
                     }

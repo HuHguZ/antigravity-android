@@ -46,6 +46,19 @@ class PhoneGeminiSendIntegrationTest {
         assertEquals("Готово", send("gemini-2.5-pro", "gemini-3.8-flash").responseMarkdown)
     }
 
+    @Test fun missingHydrogenKeyOffersOfficialSubscriptionEntryWithoutSending() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val transport = OkHttpClient.Builder().addInterceptor { error("A missing key must block the request") }.build()
+        val result = AntigravityBackendClient(PhoneResourceController(context), transport).executeAgentTurn(
+            "QA", false, AgentExecutionTarget.PHONE_LOCAL_RESOURCES, "gemini-4-hydrogen", "qa-gemini", "QA",
+            emptyList(), emptyList(), "http://127.0.0.1:1", ""
+        )
+
+        assertTrue(result.isError)
+        assertTrue(result.responseMarkdown.contains("ключ Gemini API"))
+        assertTrue(result.responseMarkdown.contains("[Открыть Antigravity с Google AI Pro](https://antigravity.google.com/)"))
+    }
+
     @Test fun unavailableModelRetainsStatusWithoutExposingProviderBody() = runBlocking {
         try { send("gemini-4-neon", "gemini-4-neon", 404); fail("Expected HTTP 404") }
         catch (error: GeminiChatFailure) {
