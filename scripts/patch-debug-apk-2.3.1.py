@@ -103,6 +103,95 @@ def patch_openrouter(directory):
                  f'    :cond_d\n    iget-object v2, v7, {CLIENT[:-1]}$stream$3$1$1;->this$0:{CLIENT}\n\n'
                  f'    invoke-virtual {{v2, v1}}, {CHECK_CHOICE}\n\n'
                  '    const-string v2, "finish_reason"')
+    patch_openrouter_rate_limit(directory, client)
+
+
+def patch_openrouter_rate_limit(directory, client):
+    old = "Достигнут лимит OpenRouter (HTTP 429). Подождите и повторите запрос вручную."
+    new = "Достигнут лимит OpenRouter (HTTP 429). Время сброса не указано. Повторите позже."
+    replace_once(client, json.dumps(old), json.dumps(new, ensure_ascii=False))
+    for name, owner, code in (("complete$2", "v3", "v9"), ("stream$3", "v12", "v1")):
+        replace_once(directory / f"DirectOpenRouterChatClient${name}.smali",
+                     f"    invoke-virtual {{v0}}, Lokhttp3/Response;->code()I\n\n    move-result {code}\n\n"
+                     f"    invoke-static {{{owner}, {code}}}, {CLIENT}->access$failure({CLIENT}I){FAILURE}",
+                     f"    invoke-virtual {{{owner}, v0}}, {CLIENT}->httpFailure(Lokhttp3/Response;){FAILURE}")
+    with client.open("a", encoding="utf-8") as out:
+        out.write(f'''
+.method public final httpFailure(Lokhttp3/Response;){FAILURE}
+    .locals 9
+    invoke-virtual {{p1}}, Lokhttp3/Response;->code()I
+    move-result v0
+    const/16 v1, 429
+    if-ne v0, v1, :generic
+
+    const-string v1, "Retry-After"
+    invoke-virtual {{p1, v1}}, Lokhttp3/Response;->header(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+    if-eqz v2, :reset
+    invoke-static {{v2}}, Lkotlin/text/StringsKt;->toLongOrNull(Ljava/lang/String;)Ljava/lang/Long;
+    move-result-object v2
+    if-eqz v2, :date
+    invoke-virtual {{v2}}, Ljava/lang/Long;->longValue()J
+    move-result-wide v3
+    const-wide/16 v5, 0x0
+    cmp-long v2, v3, v5
+    if-gtz v2, :message
+
+    :date
+    invoke-virtual {{p1}}, Lokhttp3/Response;->headers()Lokhttp3/Headers;
+    move-result-object v2
+    invoke-virtual {{v2, v1}}, Lokhttp3/Headers;->getDate(Ljava/lang/String;)Ljava/util/Date;
+    move-result-object v2
+    if-eqz v2, :reset
+    invoke-virtual {{v2}}, Ljava/util/Date;->getTime()J
+    move-result-wide v3
+    invoke-static {{}}, Ljava/lang/System;->currentTimeMillis()J
+    move-result-wide v5
+    cmp-long v2, v3, v5
+    if-gtz v2, :seconds
+
+    :reset
+    const-string v1, "X-RateLimit-Reset"
+    invoke-virtual {{p1, v1}}, Lokhttp3/Response;->header(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+    if-eqz v2, :generic
+    invoke-static {{v2}}, Lkotlin/text/StringsKt;->toLongOrNull(Ljava/lang/String;)Ljava/lang/Long;
+    move-result-object v2
+    if-eqz v2, :generic
+    invoke-virtual {{v2}}, Ljava/lang/Long;->longValue()J
+    move-result-wide v3
+    invoke-static {{}}, Ljava/lang/System;->currentTimeMillis()J
+    move-result-wide v5
+    cmp-long v2, v3, v5
+    if-lez v2, :generic
+
+    :seconds
+    sub-long/2addr v3, v5
+    const-wide/16 v5, 0x1
+    sub-long/2addr v3, v5
+    const-wide/16 v7, 0x3e8
+    div-long/2addr v3, v7
+    add-long/2addr v3, v5
+
+    :message
+    new-instance v1, Ljava/lang/StringBuilder;
+    const-string v2, "Достигнут лимит OpenRouter (HTTP 429). Повторите запрос через "
+    invoke-direct {{v1, v2}}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+    invoke-virtual {{v1, v3, v4}}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
+    const-string v2, " сек."
+    invoke-virtual {{v1, v2}}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {{v1}}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v1
+    new-instance v2, {FAILURE}
+    invoke-direct {{v2, v0, v1}}, {FAILURE}-><init>(ILjava/lang/String;)V
+    return-object v2
+
+    :generic
+    invoke-direct {{p0, v0}}, {CLIENT}->failure(I){FAILURE}
+    move-result-object v0
+    return-object v0
+.end method
+''')
 
 
 def patch_gemini(decoded):

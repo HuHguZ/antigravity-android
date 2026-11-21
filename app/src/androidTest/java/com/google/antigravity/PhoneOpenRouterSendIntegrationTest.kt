@@ -21,7 +21,8 @@ class PhoneOpenRouterSendIntegrationTest {
         code: Int,
         key: String = "qa-phone-key",
         model: String = "qa/text",
-        providerFailure: Boolean = false
+        providerFailure: Boolean = false,
+        headers: Headers = Headers.Builder().build()
     ): AntigravityBackendClient.AgentTurnResult {
         check(Build.HARDWARE in setOf("ranchu", "goldfish")) { "Owned QA emulator only" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -32,7 +33,7 @@ class PhoneOpenRouterSendIntegrationTest {
             assertEquals(model, org.json.JSONObject(payload.readUtf8()).getString("model"))
             val error = if (providerFailure) ""","finish_reason":"error","error":{"code":502}""" else ""
             val body = """{"choices":[{"message":{"content":"Телефон получил ответ без ПК.","reasoning":"QA `reasoning`"}$error}]}"""
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("QA")
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("QA").headers(headers)
                 .body(body.toResponseBody()).build()
         }.build())
         return client.executeAgentTurn("Проверка", false, AgentExecutionTarget.PHONE_LOCAL_RESOURCES,
@@ -59,6 +60,22 @@ class PhoneOpenRouterSendIntegrationTest {
         catch (failure: OpenRouterChatFailure) {
             assertEquals(502, failure.status)
             assertTrue(failure.message.orEmpty().contains("HTTP 502"))
+        }
+    }
+
+    @Test fun rateLimitReportsTheServerWaitAndHidesUnrecognizedValues() = runBlocking {
+        val fixtures = listOf(
+            Headers.Builder().add("Retry-After", "27").build() to "27 сек.",
+            Headers.Builder().add("X-RateLimit-Reset", (System.currentTimeMillis() + 60_000).toString()).build() to "сек.",
+            Headers.Builder().add("Retry-After", "bad-header").build() to "Время сброса не указано"
+        )
+        for ((headers, expected) in fixtures) {
+            try { send(429, headers = headers); fail("Expected rate limit") }
+            catch (failure: OpenRouterChatFailure) {
+                assertEquals(429, failure.status)
+                assertTrue(failure.message, failure.message.orEmpty().contains(expected))
+                assertFalse(failure.message.orEmpty().contains("bad-header"))
+            }
         }
     }
 

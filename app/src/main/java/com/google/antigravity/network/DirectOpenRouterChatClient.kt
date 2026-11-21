@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -32,7 +33,7 @@ internal class DirectOpenRouterChatClient(client: OkHttpClient = OkHttpClient())
             .header("X-OpenRouter-Title", "Antigravity Android")
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
         http.newCall(request).useCancellable { response ->
-            if (!response.isSuccessful) throw failure(response.code)
+            if (!response.isSuccessful) throw httpFailure(response)
             val json = try { JSONObject(response.body?.string().orEmpty()) } catch (_: org.json.JSONException) {
                 throw OpenRouterChatFailure(0, "OpenRouter вернул некорректный ответ. Повторите запрос вручную.")
             }
@@ -71,6 +72,17 @@ internal class DirectOpenRouterChatClient(client: OkHttpClient = OkHttpClient())
         }
     }
 
+    private fun httpFailure(response: Response): OpenRouterChatFailure {
+        if (response.code != 429) return failure(response.code)
+        val now = System.currentTimeMillis()
+        val retrySeconds = response.header("Retry-After")?.toLongOrNull()?.takeIf { it > 0 }
+        val reset = response.headers.getDate("Retry-After")?.time?.takeIf { it > now }
+            ?: response.header("X-RateLimit-Reset")?.toLongOrNull()?.takeIf { it > now }
+        val seconds = retrySeconds ?: reset?.let { 1 + (it - now - 1) / 1000 }
+        return if (seconds == null) failure(429) else OpenRouterChatFailure(429,
+            "Достигнут лимит OpenRouter (HTTP 429). Повторите запрос через $seconds сек.")
+    }
+
     private fun failure(status: Int) = OpenRouterChatFailure(status, when (status) {
         400, 422 -> "OpenRouter отклонил параметры запроса (HTTP $status). Проверьте выбранную модель."
         401 -> "Ключ OpenRouter отсутствует, недействителен или отозван (HTTP 401). Сохраните действующий ключ на телефоне."
@@ -78,7 +90,7 @@ internal class DirectOpenRouterChatClient(client: OkHttpClient = OkHttpClient())
         403 -> "OpenRouter запретил запрос (HTTP 403). Проверьте доступ ключа и ограничения провайдера."
         404 -> "Выбранная модель OpenRouter недоступна (HTTP 404). Обновите список и выберите доступную модель."
         408, 504 -> "OpenRouter не успел завершить запрос (HTTP $status). Автоматический повтор не отправлялся."
-        429 -> "Достигнут лимит OpenRouter (HTTP 429). Подождите и повторите запрос вручную."
+        429 -> "Достигнут лимит OpenRouter (HTTP 429). Время сброса не указано. Повторите позже."
         502, 503 -> "Провайдер модели временно недоступен (HTTP $status). Повторите позже или выберите другую модель."
         in 300..399 -> "OpenRouter вернул перенаправление. Ключ не передавался на другой адрес."
         else -> "OpenRouter не смог завершить запрос${if (status > 0) " (HTTP $status)" else ""}. Повторите позже."
