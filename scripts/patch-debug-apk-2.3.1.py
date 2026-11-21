@@ -12,11 +12,26 @@ from zipfile import ZipFile
 
 
 INPUT_SHA256 = "6d9bb03a2909126ef7783b73183fca4b71f090c7a39af82e15d277be7a944d91"
-DEX = {"classes9.dex": "classes.dex", "classes11.dex": "classes2.dex"}
+DEX = {"classes9.dex": "classes.dex", "classes11.dex": "classes2.dex",
+       "classes6.dex": "classes3.dex", "classes4.dex": "classes4.dex"}
 CLIENT = "Lcom/google/antigravity/network/DirectOpenRouterChatClient;"
 FAILURE = "Lcom/google/antigravity/network/OpenRouterChatFailure;"
 JSON = "Lorg/json/JSONObject;"
 CHECK_CHOICE = f"{CLIENT}->throwChoiceFailure({JSON})V"
+MODELS = "Lcom/google/antigravity/model/AntigravityModelsKt;"
+OPTION = "Lcom/google/antigravity/model/AntigravityModelOption;"
+ROUTE = "Lcom/google/antigravity/model/PhoneModelRoute;"
+MODERN = f"{MODELS}->isPublicGeminiModel(Ljava/lang/String;)Z"
+MIGRATE = f"{MODELS}->mapToDirectGeminiModelId(Ljava/lang/String;)Ljava/lang/String;"
+MERGE = f"{MODELS}->addDirectGeminiOptions(Ljava/util/List;)Ljava/util/List;"
+DIRECT_GEMINI = (
+    ("gemini-4-hydrogen", "Gemini 4 Hydrogen", "Gemini API • Есть бесплатный тариф"),
+    ("gemini-4-neon", "Gemini 4 Neon", "Gemini API • Платный тариф"),
+    ("gemini-4-carbon", "Gemini 4 Carbon", "Gemini API • Платный тариф"),
+    ("gemini-4-argon", "Gemini 4 Argon", "Gemini API • Платный тариф"),
+    ("gemini-3.8-flash", "Gemini 3.8 Flash", "Gemini API"),
+    ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "Gemini API"),
+)
 
 
 def replace_once(path, old, new):
@@ -89,6 +104,114 @@ def patch_openrouter(directory):
                  '    const-string v2, "finish_reason"')
 
 
+def patch_gemini(decoded):
+    model_dir = decoded / "smali_classes3/com/google/antigravity/model"
+    models = model_dir / "AntigravityModelsKt.smali"
+    replace_once(models, f"    sput-object v0, {MODELS}->AVAILABLE_AGY_MODELS:Ljava/util/List;",
+                 f"    invoke-static {{v0}}, {MERGE}\n    move-result-object v0\n"
+                 f"    sput-object v0, {MODELS}->AVAILABLE_AGY_MODELS:Ljava/util/List;")
+    replace_once(models, '    move-result-object v0\n\n    return-object v0\n.end method\n\n.method public static final mcpPermissionSourcePriority',
+                 '''    move-result-object v0
+    const-string v1, "gemini-2.5-pro"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-eqz v1, :check_legacy_flash
+    const-string v0, "gemini-3.8-flash"
+    return-object v0
+
+    :check_legacy_flash
+    const-string v1, "gemini-2.5-flash"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-eqz v1, :current_model
+    const-string v0, "gemini-3.5-flash-lite"
+
+    :current_model
+    return-object v0
+.end method
+
+.method public static final mcpPermissionSourcePriority''')
+
+    with models.open("a", encoding="utf-8") as out:
+        out.write("\n.method public static isPublicGeminiModel(Ljava/lang/String;)Z\n    .locals 1\n")
+        for model, _, _ in DIRECT_GEMINI:
+            out.write(f'''    const-string v0, "{model}"
+    invoke-virtual {{v0, p0}}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v0
+    if-nez v0, :public_model
+''')
+        out.write('''    const/4 v0, 0x0
+    return v0
+
+    :public_model
+    const/4 v0, 0x1
+    return v0
+.end method
+''')
+        out.write(f'''
+.method public static addDirectGeminiOptions(Ljava/util/List;)Ljava/util/List;
+    .locals 5
+    new-instance v0, Ljava/util/ArrayList;
+    invoke-direct {{v0}}, Ljava/util/ArrayList;-><init>()V
+    invoke-interface {{p0}}, Ljava/util/List;->iterator()Ljava/util/Iterator;
+    move-result-object v1
+
+    :next_model
+    invoke-interface {{v1}}, Ljava/util/Iterator;->hasNext()Z
+    move-result v2
+    if-eqz v2, :add_direct
+    invoke-interface {{v1}}, Ljava/util/Iterator;->next()Ljava/lang/Object;
+    move-result-object v2
+    check-cast v2, {OPTION}
+    invoke-virtual {{v2}}, {OPTION}->getId()Ljava/lang/String;
+    move-result-object v3
+    invoke-static {{v3}}, {MIGRATE}
+    move-result-object v4
+    invoke-virtual {{v3, v4}}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v3
+    if-eqz v3, :next_model
+    invoke-virtual {{v0, v2}}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+    goto :next_model
+
+    :add_direct
+''')
+        for model, title, badge in DIRECT_GEMINI:
+            out.write(f'''    new-instance v1, {OPTION}
+    const-string v2, "{model}"
+    const-string v3, "{title}"
+    const-string v4, "{badge}"
+    invoke-direct {{v1, v2, v3, v4}}, {OPTION}-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+    invoke-virtual {{v0, v1}}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+''')
+        out.write("    return-object v0\n.end method\n")
+
+    picker = model_dir / "ModelPickerOptionsKt.smali"
+    replace_once(picker, "    :cond_0\n    check-cast v0, Ljava/lang/Iterable;",
+                 f"    :cond_0\n    check-cast v0, Ljava/util/List;\n    invoke-static {{v0}}, {MERGE}\n"
+                 "    move-result-object v0\n    check-cast v0, Ljava/lang/Iterable;")
+    route = model_dir / "PhoneModelRouteKt.smali"
+    replace_once(route, '    .line 75\n    const-string v3, "gemini-4-"',
+                 f"    invoke-static {{v2}}, {MODERN}\n    move-result v3\n    if-eqz v3, :non_public_route\n"
+                 f"    sget-object v3, {ROUTE}->GEMINI_API:{ROUTE}\n    return-object v3\n"
+                 '    :non_public_route\n    .line 75\n    const-string v3, "gemini-4-"')
+    replace_once(route, '    .line 22\n    const-string v2, "gemini-4-"',
+                 f"    invoke-static {{v1}}, {MODERN}\n    move-result v2\n    if-eqz v2, :non_public_id\n"
+                 '    return-object v1\n    :non_public_id\n    .line 22\n    const-string v2, "gemini-4-"')
+    replace_once(route, '    const-string v3, "gemini-2.5-pro"', '    const-string v3, "gemini-4-hydrogen"')
+    replace_once(route, '    const-string v3, "gemini-2.5-flash"', '    const-string v3, "gemini-3.8-flash"')
+    replace_once(route, "    move-object v3, v0\n\n    goto :goto_1\n\n    .line 22",
+                 f"    invoke-static {{v0}}, {MIGRATE}\n    move-result-object v3\n\n    goto :goto_1\n\n    .line 22")
+
+    view_model = decoded / "smali_classes4/com/google/antigravity/viewmodel/AntigravityViewModel.smali"
+    replace_once(view_model, "    :cond_8\n    move-object/from16 v19, v0\n\n    .line 399",
+                 f"    :cond_8\n    invoke-static {{v0}}, {MIGRATE}\n    move-result-object v0\n"
+                 "    move-object/from16 v19, v0\n\n    .line 399")
+    replace_once(view_model, "    .line 2487\n    iget-object v1, v0,",
+                 f"    invoke-static {{v2}}, {MIGRATE}\n    move-result-object v2\n\n    .line 2487\n    iget-object v1, v0,")
+    backend = decoded / "smali_classes2/com/google/antigravity/network/AntigravityBackendClient.smali"
+    replace_once(backend, '    const-string v0, "gemini-2.5-flash"', '    const-string v0, "gemini-4-hydrogen"')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
@@ -125,6 +248,7 @@ def main():
         run(args.java, "-jar", args.apktool, "d", "-r", "--no-assets", "-j", "2", "-o", decoded, slice_apk)
         patch_layout(decoded / "smali/com/google/antigravity/ui/components")
         patch_openrouter(decoded / "smali_classes2/com/google/antigravity/network")
+        patch_gemini(decoded)
         rebuilt = work / "rebuilt.apk"
         run(args.java, "-jar", args.apktool, "b", "-j", "2", "-o", rebuilt, decoded)
 

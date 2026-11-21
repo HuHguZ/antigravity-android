@@ -28,6 +28,8 @@ import com.google.antigravity.model.OpenRouterCategory
 import com.google.antigravity.model.OpenRouterModelItem
 import com.google.antigravity.model.PcMcpServerItem
 import com.google.antigravity.model.PcSkillItem
+import com.google.antigravity.model.PhoneModelRoute
+import com.google.antigravity.model.phoneModelRoute
 import com.google.antigravity.model.ProjectWorkspace
 import com.google.antigravity.model.ProjectWorkspaces
 import com.google.antigravity.model.RemoteSessionItem
@@ -48,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -2396,7 +2399,8 @@ class AntigravityBackendClient(
         }
 
         // Direct OpenRouter API fallback if an OpenRouter model is selected and user provided an OpenRouter API key
-        if (selectedModelId.contains("/") && openRouterApiKey.isNotBlank()) {
+        val directRoute = phoneModelRoute(selectedModelId)
+        if (directRoute == PhoneModelRoute.OPENROUTER_API && openRouterApiKey.isNotBlank()) {
             val orResult = callDirectOpenRouterApi(
                 cleanPrompt = cleanPrompt,
                 openRouterApiKey = openRouterApiKey,
@@ -2412,7 +2416,7 @@ class AntigravityBackendClient(
         }
 
         // Fallback ONLY if user explicitly configured a direct Gemini API key in Settings
-        if (!selectedModelId.contains("/") && !selectedModelId.startsWith("gemini-4-argon") && !selectedModelId.startsWith("gemini-3.8-") && geminiApiKey.isNotBlank()) {
+        if (directRoute == PhoneModelRoute.GEMINI_API && geminiApiKey.isNotBlank()) {
             val geminiResult = executeDirectGeminiLoop(
                 cleanPrompt = cleanPrompt,
                 geminiApiKey = geminiApiKey,
@@ -2431,9 +2435,9 @@ class AntigravityBackendClient(
 
         // Honest Offline / Bridge Down message (Scenario G — zero fake template responses!)
         val honestError = when {
-            selectedModelId.startsWith("gemini-4-argon") || selectedModelId.startsWith("gemini-3.8-") ->
+            directRoute == PhoneModelRoute.PC_CLI ->
                 "Модель $selectedModelId доступна через сессию ПК, но мост не отвечает. Проверьте адрес моста и запустите PC-Bridge. Ключ Gemini API не подключает эту модель ПК. Переписка сохранена на телефоне; после восстановления связи нажмите «Повторить»."
-            selectedModelId.contains("/") -> "Не удалось получить ответ $selectedModelId. Проверьте подключение к мосту и ключ OpenRouter. Переписка сохранена на телефоне."
+            directRoute == PhoneModelRoute.OPENROUTER_API -> "Не удалось получить ответ $selectedModelId. Проверьте подключение к мосту и ключ OpenRouter. Переписка сохранена на телефоне."
             else -> "Не удалось получить ответ $selectedModelId. Проверьте подключение и ключ Gemini API. Переписка сохранена на телефоне."
         }
         AgentTurnResult(
@@ -2511,7 +2515,6 @@ class AntigravityBackendClient(
                     response.responseMarkdown
                 } else {
                     val raw = callGeminiRestApi(request, loadAssetSystemPrompt(), geminiKey, modelId, modelHistory)
-                        ?: throw java.io.IOException("Gemini API не вернул ответ. Проверьте ключ, модель и соединение.")
                     val (answer, taggedThinking) = extractClientSideThinking(raw.text)
                     publishReasoning(raw.thinking.ifBlank { taggedThinking }, child)
                     answer
@@ -2615,7 +2618,7 @@ class AntigravityBackendClient(
                     appendLine("\nПродолжи выполнение или дай итоговый ответ.")
                 }
             }
-            val rawReply = callGeminiRestApi(promptWithContext, unifiedSysPrompt, geminiApiKey, selectedModelId, sessionHistory) ?: return null
+            val rawReply = callGeminiRestApi(promptWithContext, unifiedSysPrompt, geminiApiKey, selectedModelId, sessionHistory)
             val (withoutThink, taggedThink) = extractClientSideThinking(rawReply.text)
             val inlineThink = rawReply.thinking.ifBlank { taggedThink }
             if (inlineThink.isNotBlank()) {
@@ -3181,55 +3184,50 @@ class AntigravityBackendClient(
         apiKey: String,
         selectedModelId: String,
         sessionHistory: List<ChatMessage>
-    ): ProviderReply? {
-        val directModel = mapToDirectGeminiModelId(selectedModelId)
-        val candidateModels = listOf(directModel)
-        for (model in candidateModels) {
-            try {
-                val url =
-                    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-                val payload = JSONObject().apply {
-                    if (Regex("^gemini-(2\\.5|[3-9])").containsMatchIn(model)) {
-                        put("generationConfig", JSONObject().put("thinkingConfig",
-                            JSONObject().put("includeThoughts", true)))
-                    }
-                    if (systemPrompt.isNotBlank()) {
-                        put("systemInstruction", JSONObject().apply {
-                            put("parts", JSONArray().put(JSONObject().put("text", systemPrompt)))
-                        })
-                    }
-                    put("contents", JSONArray().apply {
-                        sessionHistory.forEach { message ->
-                            put(JSONObject().apply {
-                                put("role", if (message.role == MessageRole.USER) "user" else "model")
-                                put("parts", JSONArray().put(JSONObject().put("text", message.content)))
-                            })
-                        }
-                    }.put(JSONObject().apply {
-                        put("role", "user")
-                        put("parts", JSONArray().put(JSONObject().put("text", prompt)))
-                    }))
-                }
-                android.util.Log.i(
-                    "AntigravityGeminiAPI",
-                    "POST generateContent model=$model systemInstructionChars=${systemPrompt.length} hasSystemInstruction=${payload.has("systemInstruction")}"
-                )
-                val req = Request.Builder()
-                    .url(url)
-                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-
-                httpClient.newCall(req).useCancellable { resp ->
-                    if (!resp.isSuccessful) return@useCancellable
-                    val json = JSONObject(resp.body?.string() ?: return@useCancellable)
-                    val reply = parseGeminiReply(json)
-                    if (reply.text.isNotBlank()) return reply
-                }
-            } catch (failure: Throwable) {
-                if (failure is kotlinx.coroutines.CancellationException) throw failure;
+    ): ProviderReply {
+        val model = mapToDirectGeminiModelId(selectedModelId)
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/".toHttpUrl().newBuilder()
+            .addPathSegment("$model:generateContent").build()
+        val payload = JSONObject().apply {
+            if (Regex("^gemini-(2\\.5|[3-9])").containsMatchIn(model)) {
+                put("generationConfig", JSONObject().put("thinkingConfig",
+                    JSONObject().put("includeThoughts", true)))
             }
+            if (systemPrompt.isNotBlank()) {
+                put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
+            }
+            put("contents", JSONArray().apply {
+                sessionHistory.forEach { message ->
+                    put(JSONObject()
+                        .put("role", if (message.role == MessageRole.USER) "user" else "model")
+                        .put("parts", JSONArray().put(JSONObject().put("text", message.content))))
+                }
+                put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt))))
+            })
         }
-        return null
+        val req = Request.Builder().url(url).header("x-goog-api-key", apiKey.trim())
+            .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+        val transport = directChatTransport ?: httpClient
+        return transport.newBuilder().followRedirects(false).followSslRedirects(false).build()
+            .newCall(req).useCancellable { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val reason = when (code) {
+                        400, 401 -> "Проверьте ключ Google AI Studio и параметры запроса."
+                        403 -> "Проверьте права ключа, доступ к модели и биллинг проекта Google AI Studio."
+                        404 -> "Модель $model недоступна для этого ключа. Выберите другую модель Gemini API."
+                        429 -> "Достигнут лимит Gemini API. Проверьте квоту или биллинг проекта."
+                        else -> "Повторите запрос позже."
+                    }
+                    throw GeminiChatFailure(code, "Gemini API (HTTP $code). $reason")
+                }
+                val json = try { JSONObject(response.body?.string().orEmpty()) } catch (_: org.json.JSONException) {
+                    throw GeminiChatFailure(0, "Gemini API вернул некорректный ответ.")
+                }
+                parseGeminiReply(json).also {
+                    if (it.text.isBlank()) throw GeminiChatFailure(0, "Gemini API не вернул текст для модели $model.")
+                }
+            }
     }
 }
 

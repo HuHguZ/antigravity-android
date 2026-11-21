@@ -264,7 +264,7 @@ fun AppSettingsScreen(
                     TextButton(onClick = { viewModel.openOfficialGeminiLiveApp() }) { Text("Открыть Gemini Live") }
                 }
                 if (page == "Модели и ключи") {
-                    SettingsNote("Gemini 4 Argon и Gemini 3.8 работают через Antigravity на ПК. Для них нужен мост, ключ API не требуется. API-модели могут работать без ПК.")
+                    SettingsNote("Для чата без ПК выберите «Телефон», затем модель с пометкой Gemini API. У Gemini 4 Hydrogen есть бесплатный тариф. Варианты моделей с пометкой High, Medium или Fast используют сессию ПК.")
                     SettingsGroup("Gemini API") {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             var reveal by remember { mutableStateOf(false) }
@@ -284,6 +284,7 @@ fun AppSettingsScreen(
                             if (verificationCandidate == settings.geminiApiKey && verification.isNotBlank()) Text(verification,
                                 color = if (verified == true) Color.White else MaterialTheme.colorScheme.error, fontSize = 13.sp)
                             TextButton(onClick = { open("https://aistudio.google.com/apikey") }) { Text("Открыть Google AI Studio") }
+                            TextButton(onClick = { open("https://gemini.google.com/") }) { Text("Открыть Gemini по подписке") }
                         }
                     }
                     SettingsNote("Изменения сохраняются автоматически. Ключи и модели OpenRouter настраиваются в каталоге OpenRouter в меню выбора модели.")

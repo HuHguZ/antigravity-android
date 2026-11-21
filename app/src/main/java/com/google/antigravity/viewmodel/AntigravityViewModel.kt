@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.antigravity.device.PhoneResourceController
 import com.google.antigravity.model.AVAILABLE_AGY_MODELS
+import com.google.antigravity.model.mapToDirectGeminiModelId
 import com.google.antigravity.model.VideoRun
 import com.google.antigravity.model.VideoRunStore
 import com.google.antigravity.network.VideoJobFailure
@@ -315,7 +316,7 @@ class AntigravityViewModel internal constructor(application: Application,
             activeConversationId = prefs.getString("active_conversation_id", "").orEmpty(),
             activeSessionTitle = prefs.getString("active_session_title", "").orEmpty(),
             executionTarget = runCatching { AgentExecutionTarget.valueOf(prefs.getString("active_execution_target", "PC_REMOTE_SESSION").orEmpty()) }.getOrDefault(AgentExecutionTarget.PC_REMOTE_SESSION),
-            selectedModelId = prefs.getString("selected_model_id", "gemini-4-argon-high") ?: "gemini-4-argon-high",
+            selectedModelId = mapToDirectGeminiModelId(prefs.getString("selected_model_id", null) ?: "gemini-4-argon-high"),
             voiceProvider = runCatching {
                 VoiceProvider.valueOf(prefs.getString("voice_provider", VoiceProvider.NEURAL_BRIDGE.name) ?: VoiceProvider.NEURAL_BRIDGE.name)
             }.getOrDefault(VoiceProvider.NEURAL_BRIDGE),
@@ -1594,8 +1595,9 @@ class AntigravityViewModel internal constructor(application: Application,
     }
 
     fun setSelectedModel(modelId: String) {
-        prefs.edit().putString("selected_model_id", modelId).apply()
-        _settings.update { it.copy(selectedModelId = modelId) }
+        val selected = mapToDirectGeminiModelId(modelId)
+        prefs.edit().putString("selected_model_id", selected).apply()
+        _settings.update { it.copy(selectedModelId = selected) }
     }
 
     fun setForcePublicTunnelOnly(enabled: Boolean) {
@@ -4105,6 +4107,7 @@ class AntigravityViewModel internal constructor(application: Application,
                     else "Переписка сохранена на телефоне. "
                 val errorText = when {
                     e is com.google.antigravity.network.OpenRouterChatFailure -> e.message.orEmpty()
+                    e is com.google.antigravity.network.GeminiChatFailure -> e.message.orEmpty()
                     offline -> "Связь прервалась — ответ не завершён. " + saved +
                         "Проверьте подключение и нажмите «Повторить»."
                     else -> "Не удалось получить ответ. " + saved + "Попробуйте ещё раз."

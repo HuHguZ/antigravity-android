@@ -11,7 +11,13 @@ class GeminiModelIdentityTest {
     }
 
     @Test fun directApiModelKeepsItsExactIdentity() {
-        assertEquals("gemini-2.5-pro", mapToDirectGeminiModelId("models/gemini-2.5-pro"))
-        assertEquals("gemini-2.5-flash", mapToDirectGeminiModelId("gemini-2.5-flash"))
+        assertEquals("gemini-4-argon", mapToDirectGeminiModelId("models/gemini-4-argon"))
+        assertEquals("gemini-4-hydrogen", mapToDirectGeminiModelId("gemini-4-hydrogen"))
+        assertEquals("google/gemini-2.5-pro", mapToDirectGeminiModelId("google/gemini-2.5-pro"))
+    }
+
+    @Test fun oldDirectApiSelectionsUseTheDocumentedReplacements() {
+        assertEquals("gemini-3.8-flash", mapToDirectGeminiModelId("models/gemini-2.5-pro"))
+        assertEquals("gemini-3.5-flash-lite", mapToDirectGeminiModelId("gemini-2.5-flash"))
     }
 }
