@@ -17,6 +17,14 @@ class LocalAntigravityHubTest {
     }
 
     @Test
+    fun acceptsTheLinkCopiedWithTerminalOutputOrWithoutTheScheme() {
+        val link = "http://localhost:4400/#t=example"
+        assertEquals(link, parseLocalAntigravityLaunchUrl("Open in browser: <$link>\nPress Enter to retry.")?.toString())
+        assertEquals(link, parseLocalAntigravityLaunchUrl("http://localhost:4400/\n#t=example")?.toString())
+        assertEquals(link, parseLocalAntigravityLaunchUrl("localhost:4400/#t=example")?.toString())
+    }
+
+    @Test
     fun rejectsMissingTokenAndNonLocalLinks() {
         listOf(
             "http://localhost:4400/",
@@ -26,7 +34,9 @@ class LocalAntigravityHubTest {
             "http://example.com:4400/#t=example",
             "http://localhost@example.com:4400/#t=example",
             "http://username@localhost:4400/#t=example",
-            "http://localhost:65536/#t=example"
+            "http://localhost:65536/#t=example",
+            "https://example.com/?next=http://localhost:4400/#t=example",
+            "http://localhost:4400/#t=old\nhttp://localhost:4400/#t=new"
         ).forEach { assertNull(it, parseLocalAntigravityLaunchUrl(it)) }
     }
 

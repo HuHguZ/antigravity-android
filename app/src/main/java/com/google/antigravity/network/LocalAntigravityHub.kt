@@ -7,7 +7,6 @@ import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.Proxy
 import java.net.URI
-import java.net.URISyntaxException
 import java.util.concurrent.TimeUnit
 
 private const val HUB_HOST = "127.0.0.1"
@@ -16,20 +15,21 @@ internal const val LOCAL_ANTIGRAVITY_HUB_COMMAND = "AGY_ENABLE_HUB=1 ~/.local/bi
 
 internal enum class LocalHubFailure { NOT_RUNNING, TIMEOUT, UNEXPECTED_RESPONSE }
 
-private val hubLaunchFragment = Regex("t=[A-Za-z0-9._~-]+")
+private val hubLaunchLink = Regex(
+    """(?:^|[\s<("'`])(?:http://)?(localhost|127\.0\.0\.1):([0-9]{1,5})/?\s*#t=([A-Za-z0-9._~-]+)(?=$|[\s>)"'`,;])""",
+    RegexOption.IGNORE_CASE
+)
 
-internal fun parseLocalAntigravityLaunchUrl(input: String): URI? {
-    val uri = try {
-        URI(input.trim())
-    } catch (_: URISyntaxException) {
-        return null
+internal fun parseLocalAntigravityLaunchUrl(input: String): URI? = hubLaunchLink.findAll(input)
+    .mapNotNull { match ->
+        val (host, portText, token) = match.destructured
+        val port = portText.toInt()
+        if (port in 1..65535) URI("http://${host.lowercase()}:$port/#t=$token") else null
     }
-    return uri.takeIf {
-        it.scheme == "http" && (it.host == "localhost" || it.host == HUB_HOST) &&
-            it.port in 1..65535 && it.rawPath == "/" && it.rawUserInfo == null &&
-            it.rawQuery == null && it.rawFragment?.matches(hubLaunchFragment) == true
-    }
-}
+    .distinct()
+    .take(2)
+    .toList()
+    .singleOrNull()
 
 private val localHubClient = OkHttpClient.Builder()
     .proxy(Proxy.NO_PROXY)

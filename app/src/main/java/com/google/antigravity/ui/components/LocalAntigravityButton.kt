@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,19 +45,24 @@ internal fun LocalAntigravityButton(onOpened: () -> Unit) {
 @Composable
 private fun LocalAntigravityDialog(onDismiss: () -> Unit, onOpened: () -> Unit) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val url = remember(input) { parseLocalAntigravityLaunchUrl(input) }
-    val fieldError = error ?: if (input.isNotBlank() && url == null) "Нужна полная локальная ссылка из Termux." else null
+    val fieldError = error ?: if (input.isNotBlank() && url == null) {
+        "Скопируйте из Termux одну ссылку вместе с частью #t=…"
+    } else {
+        null
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Локальный Antigravity") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Запустите Hub в Termux на этом телефоне и вставьте полную ссылку из вывода команды.")
+                Text("Запустите Hub в Termux. Скопируйте ссылку из вывода команды, например http://localhost:4400/#t=…")
                 SelectionContainer {
                     Text(LOCAL_ANTIGRAVITY_HUB_COMMAND, fontFamily = FontFamily.Monospace)
                 }
@@ -73,6 +79,17 @@ private fun LocalAntigravityDialog(onDismiss: () -> Unit, onOpened: () -> Unit) 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     visualTransformation = PasswordVisualTransformation(),
                     isError = fieldError != null,
+                    trailingIcon = {
+                        TextButton(enabled = !checking, onClick = {
+                            val pasted = clipboard.getText()?.text
+                            if (pasted.isNullOrBlank()) {
+                                error = "В буфере обмена нет ссылки."
+                            } else {
+                                input = pasted
+                                error = null
+                            }
+                        }) { Text("Вставить") }
+                    },
                     supportingText = fieldError?.let { message -> { Text(message) } }
                 )
             }
