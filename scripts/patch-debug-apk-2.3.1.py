@@ -58,6 +58,9 @@ def patch_layout(directory):
         if count != expected:
             raise ValueError(f"Unexpected intrinsic height calls in {name}: {count}")
         path.write_text(text, encoding="utf-8")
+    # Android's regex engine rejects the unescaped closing brace in the shell token pattern.
+    replace_once(directory / "SyntaxHighlighter.smali", r'(\\$[\\w{][^}\\s]*}?|\\$\\w+)',
+                 r'(\\$\\{[^\\}\\s]+\\}|\\$\\w+)')
 
 
 def patch_openrouter(directory):
