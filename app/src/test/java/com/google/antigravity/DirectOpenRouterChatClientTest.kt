@@ -3,6 +3,7 @@ package com.google.antigravity
 import com.google.antigravity.network.*
 import kotlinx.coroutines.runBlocking
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,11 +12,11 @@ import org.junit.Test
 import java.io.IOException
 
 class DirectOpenRouterChatClientTest {
-    private fun client(code: Int, body: String, inspect: (Request) -> Unit = {}) = DirectOpenRouterChatClient(
+    private fun client(code: Int, body: String, stream: Boolean = false, inspect: (Request) -> Unit = {}) = DirectOpenRouterChatClient(
         OkHttpClient.Builder().addInterceptor { chain ->
             inspect(chain.request())
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("QA")
-                .body(body.toResponseBody()).build()
+                .body(body.toResponseBody(if (stream) "text/event-stream".toMediaType() else null)).build()
         }.build())
     private val history get() = JSONArray().put(JSONObject().put("role", "user").put("content", "Привет"))
 
@@ -29,10 +30,57 @@ class DirectOpenRouterChatClientTest {
             val payload = JSONObject(buffer.readUtf8())
             assertEquals("vendor/exact", payload.getString("model"))
             assertEquals(4096, payload.getInt("max_tokens"))
-            assertFalse(payload.getBoolean("stream"))
+            assertTrue(payload.getBoolean("stream"))
             assertEquals("Привет", payload.getJSONArray("messages").getJSONObject(0).getString("content"))
         }.complete("vendor/exact", " qa-secret ", history)
         assertEquals(1, calls); assertEquals("Ответ", result.text); assertEquals("Summary", result.reasoning)
+        assertEquals(31, result.outputTokens)
+    }
+
+    @Test fun streamedReasoningSurvivesAnAnswerThatEndsAtTheTokenLimit() = runBlocking {
+        val stream = """
+            : OPENROUTER PROCESSING
+
+            data: {"choices":[{"delta":{"reasoning":"Сначала"}}]}
+
+            data: {"choices":[{"delta":{"reasoning":" план"},"finish_reason":"length"}]}
+
+            data: {"choices":[],"usage":{"completion_tokens":8192}}
+
+            data: [DONE]
+        """.trimIndent()
+        val updates = mutableListOf<String>()
+        try {
+            client(200, stream, stream = true) { request ->
+                val buffer = okio.Buffer()
+                request.body!!.writeTo(buffer)
+                assertEquals(8192, JSONObject(buffer.readUtf8()).getInt("max_tokens"))
+            }.complete("particle-ai/particle-1:free", "qa-key", history, onReasoning = { updates.add(it) })
+            fail("Expected a token limit error")
+        } catch (failure: OpenRouterChatFailure) {
+            assertTrue(failure.message.orEmpty().contains("лимит ответа"))
+            assertEquals(listOf("Сначала", "Сначала план"), updates.distinct())
+        }
+    }
+
+    @Test fun streamedDetailsKeepOnlyReadableProviderContentAndAssembleTheFinalReply() = runBlocking {
+        val stream = """
+            data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"План"},{"type":"reasoning.encrypted","data":"private"}]}}]}
+
+            data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":" готов"}]},"finish_reason":null}]}
+
+            data: {"choices":[{"delta":{"content":"Ответ"},"finish_reason":"stop"}]}
+
+            data: {"choices":[],"usage":{"completion_tokens":31}}
+
+            data: [DONE]
+        """.trimIndent()
+        val updates = mutableListOf<String>()
+        val result = client(200, stream, stream = true)
+            .complete("test/model", "qa-key", history, onReasoning = { updates.add(it) })
+        assertEquals("План готов", result.reasoning)
+        assertEquals("План готов", updates.last())
+        assertEquals("Ответ", result.text)
         assertEquals(31, result.outputTokens)
     }
 
@@ -63,6 +111,24 @@ class DirectOpenRouterChatClientTest {
         val result = client(200, """{"choices":[{"message":{"content":[{"type":"text","text":"A"},{"type":"image_url","image_url":{}},{"type":"text","text":"B"}]}}]}""")
             .complete("qa/model", "qa-key", history)
         assertEquals("AB", result.text); assertEquals(0, result.outputTokens)
+    }
+
+    @Test fun reportsProviderFailureEvenWhenHttp200ContainsPartialText() = runBlocking {
+        val body = """{"choices":[{"message":{"content":"Partial text"},"finish_reason":"error","error":{"code":502,"message":"qa-key private prompt"}}]}"""
+        try {
+            client(200, body).complete("qa/model", "qa-key", history)
+            fail("Partial text from a failed generation must not be reported as success")
+        } catch (failure: OpenRouterChatFailure) {
+            assertEquals(502, failure.status)
+            assertFalse(failure.message.orEmpty().contains("qa-key"))
+            assertFalse(failure.message.orEmpty().contains("private prompt"))
+        }
+    }
+
+    @Test fun displaysOnlyReadableStructuredReasoningWhenPlainReasoningIsAbsent() = runBlocking {
+        val body = """{"choices":[{"message":{"content":"OK","reasoning":null,"reasoning_details":[{"type":"reasoning.summary","summary":"Summary"},{"type":"reasoning.encrypted","data":"opaque"},{"type":"reasoning.text","text":"Additional detail","signature":"opaque"}]}}]}"""
+        val result = client(200, body).complete("qa/model", "qa-key", history)
+        assertEquals("Summary\nAdditional detail", result.reasoning)
     }
 
     @Test fun rejectsRedirectWithoutFollowingOrReplaying() = runBlocking {

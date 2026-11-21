@@ -7,6 +7,37 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PhoneAgentEngineTest {
+    private val unsupportedToolCall = "<tool_call>\n<function=read_file>\n<parameter=path>\n/workspace/notes.md\n</parameter>\n</function>\n</tool_call>"
+
+    @Test fun retriesAnUnsupportedToolFormatWithoutExecutingIt() = runBlocking {
+        var calls = 0
+        val engine = PhoneAgentEngine(model = { prompt, _ ->
+            if (calls++ == 0) "Сейчас подготовлю слайды.\n$unsupportedToolCall"
+            else {
+                assertTrue(prompt.contains("Предыдущий вызов не выполнен"))
+                "## Санкт-Петербург\n1. История\n2. Архитектура"
+            }
+        }, execute = { error("Unsupported markup must not reach tools") }, publish = {})
+        val result = engine.run("Подготовь слайды")
+        assertEquals(2, calls)
+        assertTrue(result.completed)
+        assertTrue(result.text.startsWith("## Санкт-Петербург"))
+        assertTrue(result.tools.isEmpty())
+    }
+
+    @Test fun repeatedUnsupportedToolMarkupIsAnErrorAndFencedExamplesArePreserved() = runBlocking {
+        val engine = PhoneAgentEngine(model = { _, _ -> unsupportedToolCall },
+            execute = { error("Unsupported markup must not reach tools") }, publish = {})
+        val result = engine.run("Подготовь слайды")
+        assertFalse(result.completed)
+        assertFalse(result.text.contains("<function="))
+
+        val example = "Пример разметки:\n```xml\n$unsupportedToolCall\n```"
+        val exampleEngine = PhoneAgentEngine(model = { _, _ -> example },
+            execute = { error("A code example must not reach tools") }, publish = {})
+        assertEquals(example, exampleEngine.run("Покажи пример XML").text)
+    }
+
     @Test fun growingToolOutputsStayBoundedWithoutLosingCompletedEvidence() = runBlocking {
         var rounds = 0
         var executed = 0
@@ -124,7 +155,7 @@ class PhoneAgentEngineTest {
         var calls = 0
         val engine = PhoneAgentEngine(model = { prompt, child ->
             assertFalse(child)
-            assertTrue(prompt.contains("android_cli(command)"))
+            assertTrue(prompt.contains("android_cli(command,project)"))
             assertTrue(prompt.contains("sandbox_test(sandboxId)"))
             if (calls++ == 0) "```phone_action {\"action\":\"android_cli\",\"command\":\"pwd\"} ```"
             else { assertTrue(prompt.contains("/real/android/workspace")); "Рабочая папка получена" }

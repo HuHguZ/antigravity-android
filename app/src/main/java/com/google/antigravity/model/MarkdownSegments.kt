@@ -1,4 +1,4 @@
-package com.google.antigravity.ui.components
+package com.google.antigravity.model
 
 internal data class MarkdownSegment(val isCodeBlock: Boolean, val language: String, val text: String)
 

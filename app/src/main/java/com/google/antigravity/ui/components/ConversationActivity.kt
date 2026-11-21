@@ -50,6 +50,10 @@ internal fun ConversationActivity(
     if (thinking.isNotEmpty()) {
         ActivityRow("Ход рассуждений", null, onToggleThinking, null, reasoning = true)
     }
+    tools.filter { it.toolName == "preview_project" && it.status == ToolCallStatus.COMPLETED }
+        .map { it.details }.filter { it.isNotBlank() }.distinct().forEach { preview ->
+            ChatGptMarkdownText(preview, textSize = readingTextSize, responseFont = responseFont)
+        }
     if (tools.isNotEmpty()) {
         val active = tools.lastOrNull { it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.AWAITING_APPROVAL || it.status == ToolCallStatus.APPROVED }
         val failed = tools.count { it.status == ToolCallStatus.FAILED }

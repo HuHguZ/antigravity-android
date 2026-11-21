@@ -4,7 +4,8 @@ package com.google.antigravity.model
 fun modelPickerOptions(
     available: List<AntigravityModelOption>, selectedId: String, selectedDisplay: String
 ): List<AntigravityModelOption> {
-    val models = available.ifEmpty { AVAILABLE_AGY_MODELS }.distinctBy { it.id }
+    val models = (available.ifEmpty { AVAILABLE_AGY_MODELS }
+        .filterNot { mapToDirectGeminiModelId(it.id) != it.id } + DIRECT_GEMINI_MODELS).distinctBy { it.id }
     return if (selectedId.isNotBlank() && models.none { it.id == selectedId }) {
         listOf(AntigravityModelOption(selectedId, selectedDisplay, "Текущая модель")) + models
     } else models

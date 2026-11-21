@@ -5,6 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PhoneActionProtocolTest {
+    @org.junit.Test fun keepsMarkdownFencesInProjectFileContents() {
+        val body = org.json.JSONObject().put("action", "write_project_file")
+            .put("content", "README\n```js\nconsole.log(1)\n```\n").toString()
+        val response = "```phone_action\n$body\n```\nГотово"
+        org.junit.Assert.assertEquals("Готово", processPhoneActionBlocks(response) {
+            org.junit.Assert.assertEquals(body, it)
+            true
+        })
+    }
+
     @Test fun jsonCodeExamplesNeverInvokeDeviceTools() {
         val response = "Example:\n```json\n{\"action\":\"delete_file\",\"path\":\"notes.txt\"}\n```"
         var called = false

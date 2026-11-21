@@ -62,7 +62,7 @@ fun AppSettingsScreen(
     viewModel: AntigravityViewModel, settings: AntigravitySettings,
     googleEmail: String, pcInstanceName: String,
     onUpdate: ((AntigravitySettings) -> AntigravitySettings) -> Unit,
-    onOpenGoogleWeb: () -> Unit, onSignOut: () -> Unit, onBack: () -> Unit,
+    onOpenGoogleWeb: () -> Unit, onChangeGoogleAccount: () -> Unit, onBack: () -> Unit,
     onOpenPermissions: () -> Unit, onOpenDrawer: () -> Unit = onBack,
     initialPage: String = "Настройки"
 ) {
@@ -264,7 +264,7 @@ fun AppSettingsScreen(
                     TextButton(onClick = { viewModel.openOfficialGeminiLiveApp() }) { Text("Открыть Gemini Live") }
                 }
                 if (page == "Модели и ключи") {
-                    SettingsNote("Gemini 4 Argon и Gemini 3.8 работают через Antigravity на ПК. Для них нужен мост, ключ API не требуется. API-модели могут работать без ПК.")
+                    SettingsNote("Для чата без ПК выберите «Телефон», затем модель с пометкой Gemini API. У Gemini 4 Hydrogen есть бесплатный тариф. Варианты моделей с пометкой High, Medium или Fast используют сессию ПК.")
                     SettingsGroup("Gemini API") {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             var reveal by remember { mutableStateOf(false) }
@@ -284,6 +284,7 @@ fun AppSettingsScreen(
                             if (verificationCandidate == settings.geminiApiKey && verification.isNotBlank()) Text(verification,
                                 color = if (verified == true) Color.White else MaterialTheme.colorScheme.error, fontSize = 13.sp)
                             TextButton(onClick = { open("https://aistudio.google.com/apikey") }) { Text("Открыть Google AI Studio") }
+                            TextButton(onClick = { open("https://gemini.google.com/") }) { Text("Открыть Gemini по подписке") }
                         }
                     }
                     SettingsNote("Изменения сохраняются автоматически. Ключи и модели OpenRouter настраиваются в каталоге OpenRouter в меню выбора модели.")
@@ -328,9 +329,14 @@ fun AppSettingsScreen(
                     }, modifier = Modifier.fillMaxWidth()) { Text("Открыть настройки Android") }
                 }
                 if (page == "Профиль" || page == "Аккаунт") {
-                    SettingsGroup("Google") { Text(googleEmail.ifBlank { "Вход не выполнен" }, color = Color.White, modifier = Modifier.padding(16.dp)) }
-                    OutlinedButton(onClick = onOpenGoogleWeb, modifier = Modifier.fillMaxWidth()) { Text("Открыть веб-сессию") }
-                    TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Text("Сменить аккаунт") }
+                    SettingsGroup("Аккаунт Google на телефоне") {
+                        Text(googleEmail.ifBlank { "Аккаунт не выбран" }, color = Color.White, modifier = Modifier.padding(16.dp))
+                    }
+                    OutlinedButton(onClick = onChangeGoogleAccount, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (googleEmail.isBlank()) "Выбрать аккаунт Google" else "Сменить аккаунт")
+                    }
+                    SettingsNote("Вход в Antigravity Hub выполняется в браузере.")
+                    LocalAntigravityButton(onOpened = {})
                     SettingsGroup("На этом устройстве") {
                         Text("Antigravity · ${BuildConfig.VERSION_NAME}", color = DesignColors.TextPrimary, modifier = Modifier.padding(16.dp))
                     }

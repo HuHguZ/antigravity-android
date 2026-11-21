@@ -842,6 +842,15 @@ fun humanizeToolNameRu(rawToolName: String): String {
     val normalized = rawToolName.trim().lowercase()
     return when {
         normalized == "delegate_task" -> "Делегирование"
+        normalized == "create_project" -> "Создание проекта"
+        normalized == "create_presentation" -> "Создание презентации"
+        normalized == "export_project" -> "Экспорт проекта в ZIP"
+        normalized == "preview_project" -> "Превью проекта в браузере"
+        normalized == "check_project" -> "Проверка файлов проекта"
+        normalized == "test_web_project" -> "Тест проекта в браузере"
+        normalized == "list_project_files" -> "Список файлов проекта"
+        normalized == "read_project_file" -> "Чтение файла проекта"
+        normalized == "write_project_file" || normalized == "patch_project_file" -> "Запись файла проекта"
         normalized.contains("create_file") || normalized.contains("write_file") || normalized.contains("write_to_file") -> "Создание файла"
         normalized.contains("patch_file") || normalized.contains("edit_file") || normalized.contains("replace_file") || normalized.contains("modify") -> "Точечное изменение файла"
         normalized.contains("append_file") -> "Дозапись в файл"
@@ -1053,19 +1062,27 @@ data class AntigravityModelOption(
     val badge: String
 )
 
+internal val DIRECT_GEMINI_MODELS = listOf(
+    AntigravityModelOption("gemini-4-hydrogen", "Gemini 4 Hydrogen", "Gemini API • Есть бесплатный тариф"),
+    AntigravityModelOption("gemini-4-neon", "Gemini 4 Neon", "Gemini API • Платный тариф"),
+    AntigravityModelOption("gemini-4-carbon", "Gemini 4 Carbon", "Gemini API • Платный тариф"),
+    AntigravityModelOption("gemini-4-argon", "Gemini 4 Argon", "Gemini API • Платный тариф"),
+    AntigravityModelOption("gemini-3.8-flash", "Gemini 3.8 Flash", "Gemini API"),
+    AntigravityModelOption("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "Gemini API")
+)
+
 val AVAILABLE_AGY_MODELS = listOf(
     AntigravityModelOption("gemini-4-argon-high", "Gemini 4 Argon (High)", "Основная флагманская модель • Глубокое мышление и архитектура"),
     AntigravityModelOption("gemini-4-argon-medium", "Gemini 4 Argon (Medium)", "Оптимальный баланс скорости и глубины анализа"),
     AntigravityModelOption("gemini-4-argon-low", "Gemini 4 Argon (Fast)", "Быстрые ответы Gemini 4 для повседневных задач"),
     AntigravityModelOption("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)", "Мгновенный отклик с расширенным анализом"),
-    AntigravityModelOption("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)", "Универсальная быстрая модель для чата и голоса"),
-    AntigravityModelOption("gemini-2.5-pro", "Gemini 2.5 Pro", "Прямой Gemini API • Сложное рассуждение и длинный контекст"),
-    AntigravityModelOption("gemini-2.5-flash", "Gemini 2.5 Flash", "Прямой Gemini API • Сверхбыстрый мультимодальный режим")
-)
+    AntigravityModelOption("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)", "Универсальная быстрая модель для чата и голоса")
+) + DIRECT_GEMINI_MODELS
 
-fun mapToDirectGeminiModelId(selectedModelId: String): String {
-    return selectedModelId.trim().removePrefix("models/")
-
+fun mapToDirectGeminiModelId(selectedModelId: String): String = when (val id = selectedModelId.trim().removePrefix("models/")) {
+    "gemini-2.5-pro" -> "gemini-3.8-flash"
+    "gemini-2.5-flash" -> "gemini-3.5-flash-lite"
+    else -> id
 }
 
 enum class OpenRouterCategory(val code: String, val labelRu: String, val emoji: String) {

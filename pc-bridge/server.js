@@ -4,6 +4,7 @@ const { createBridgeHttpAccess } = require('./lib/bridge-http-access');
 const crypto = require('node:crypto');
 const { readJsonBody } = require('./lib/read-json-body');
 const { OpenRouterCatalog } = require('./lib/openrouter-catalog');
+const { OpenRouterChatError, readOpenRouterCompletion } = require('./lib/openrouter-chat');
 const { OpenRouterVideoJobs } = require('./lib/openrouter-video-jobs');
 const { downloadOpenRouterVideo } = require('./lib/openrouter-video-download');
 const { createOpenRouterVideoApi } = require('./lib/openrouter-video-api');
@@ -3861,8 +3862,14 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
 
     const modelProfile = liveOpenRouterModelsMemoryCache.find(m => m.id === cleanModelId) ||
         classifyOpenRouterModel({ id: cleanModelId, name: cleanModelId });
+    const hasApiKey = orConfig.apiKey && orConfig.apiKey.trim().length > 10;
+    let error = hasApiKey ? 'OpenRouter не вернул ответ выбранной модели. Повторите запрос.' :
+        'Для выбранной модели требуется ключ OpenRouter в настройках.';
+    let status = 'failed';
+    let thinking = '';
+    let partialReply = '';
     // Если задан API-ключ OpenRouter — обращаемся напрямую к https://openrouter.ai/api/v1/chat/completions
-    if (orConfig.apiKey && orConfig.apiKey.trim().length > 10) {
+    if (hasApiKey) {
         const abortController = new AbortController();
         turnCancellations.set(turnId, () => abortController.abort());
         try {
@@ -3913,41 +3920,33 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
                 Array.isArray(options.mcpConnections) && options.mcpConnections.length > 0 ? options.mcpConnections : null
             );
             let lastUsage = null;
-            const orRequest = (msgs, toolSchemas) => new Promise((resolve, reject) => {
+            const orRequest = (msgs, toolSchemas, onReasoning) => new Promise((resolve, reject) => {
                 const payload = {
                     model: cleanModelId,
                     messages: msgs,
-                    include_reasoning: true
+                    include_reasoning: true,
+                    stream: true
                 };
                 if (Array.isArray(toolSchemas) && toolSchemas.length > 0) {
                     payload.tools = toolSchemas;
                 }
-                const bodyStr = JSON.stringify(payload);
                 const r = https.request('https://openrouter.ai/api/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${orConfig.apiKey.trim()}`,
                         'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream, application/json',
                         'HTTP-Referer': 'https://antigravity.google',
                         'X-Title': 'Google Antigravity Android 2.0'
                     },
-                    timeout: 45000
+                    timeout: 45000,
+                    signal: abortController.signal
                 }, (resp) => {
-                    let b = '';
-                    resp.on('data', ch => { b += ch.toString('utf8'); });
-                    resp.on('end', () => resolve({ status: resp.statusCode, body: b }));
+                    readOpenRouterCompletion(resp, onReasoning).then(resolve, reject);
                 });
-                r.on('error', reject);
-                r.on('timeout', () => r.destroy(new Error('OpenRouter request timed out')));
-                const onAbort = () => r.destroy(new Error('Generation cancelled'));
-                if (abortController.signal.aborted) {
-                    r.destroy();
-                    reject(new Error('Generation cancelled'));
-                    return;
-                }
-                abortController.signal.addEventListener('abort', onAbort, { once: true });
-                r.write(bodyStr);
-                r.end();
+                r.once('error', reject);
+                r.once('timeout', () => r.destroy(new OpenRouterChatError('OpenRouter не ответил вовремя.')));
+                r.end(JSON.stringify(payload));
             });
 
             const loop = await extensionRuntime.runToolCallLoop({
@@ -3958,14 +3957,26 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
                 signal: abortController.signal,
                 hookRunner,
                 chat: async (msgs, toolSchemas) => {
-                    const resp = await orRequest(msgs, toolSchemas);
-                    const parsed = JSON.parse(resp.body || '{}');
-                    lastUsage = parsed.usage || lastUsage;
-                    const choice = parsed.choices && parsed.choices[0] && parsed.choices[0].message;
-                    if (!choice) {
-                        throw new Error('OpenRouter не вернул ответ выбранной модели');
+                    let newRound = Boolean(thinking);
+                    const completion = await orRequest(msgs, toolSchemas, (fragment) => {
+                        if (!fragment || abortController.signal.aborted) return;
+                        const delta = (newRound ? '\n\n' : '') + fragment;
+                        newRound = false;
+                        thinking += delta;
+                        recordActiveTurnSnapshot(turnId, resolvedConvId, { status: 'running', thinking });
+                        try {
+                            onEvent({ type: 'thinking_delta', turnId, delta, elapsedMs: Date.now() - startMs });
+                        } catch (_) {}
+                    });
+                    lastUsage = completion.usage || lastUsage;
+                    if (completion.finishReason === 'length') {
+                        const extracted = extractThinkingAndCleanReply(String(completion.message?.content || ''), thinking);
+                        thinking = extracted.thinking || thinking;
+                        partialReply = extracted.reply;
+                        throw new OpenRouterChatError('OpenRouter исчерпал лимит токенов ответа.');
                     }
-                    return { message: choice };
+                    if (!completion.message) throw new Error('Missing OpenRouter message');
+                    return { message: completion.message };
                 },
                 execute: (ref, args, { signal, callId } = {}) => {
                     return extensionRuntime.executeBrokerToolCall(ref, args, {
@@ -4023,20 +4034,13 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
                 }
             });
 
-            if (loop.cancelled || abortController.signal.aborted) {
-                const cancelError = 'Остановлено пользователем (Stop).';
-                const cancelled = { type: 'done', ok: false, turnId, conversationId: resolvedConvId,
-                    model: cleanModelId, reply: cancelError, error: cancelError,
-                    thinking: '', toolCalls: [], createdDiffs: [], generatedMedia: [] };
-                recordActiveTurnSnapshot(turnId, resolvedConvId, { status: 'cancelled', ...cancelled });
-                try { onEvent(cancelled); } catch (_) {}
-                turnCancellations.delete(turnId);
-                return cancelled;
-            }
+            if (loop.cancelled) abortController.abort();
+            abortController.signal.throwIfAborted();
 
             const choice = loop.finalMessage;
             if (choice && (choice.content || loop.toolCalls.length > 0)) {
-                const extracted = extractThinkingAndCleanReply(String(choice.content || ''), choice.reasoning || '');
+                const extracted = extractThinkingAndCleanReply(String(choice.content || ''), thinking);
+                thinking = extracted.thinking || thinking;
                 const finalReplyText = extracted.reply || String(choice.content || '');
                 const totalMs = Math.max(200, Date.now() - startMs);
                 const outTokens = Number(lastUsage && lastUsage.completion_tokens) || 0;
@@ -4060,7 +4064,7 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
                     instanceName: INSTANCE_NAME,
                     conversationId: resolvedConvId,
                     model: cleanModelId,
-                    thinking: extracted.thinking || '',
+                    thinking,
                     thinkingDurationSec: Math.max(1, Math.round(totalMs / 1000)),
                     reply: finalReplyText,
                     toolCalls: loop.toolCalls.map(tc => ({
@@ -4081,32 +4085,25 @@ async function executeOpenRouterStreamingTurn(options, onEvent = () => {}) {
                 };
                 recordActiveTurnSnapshot(turnId, resolvedConvId, { status: 'completed', ...donePayload });
                 try { onEvent(donePayload); } catch (_) {}
-                turnCancellations.delete(turnId);
-                if (options.allowTranscriptWrite !== false) ensureTranscriptUpdated(resolvedConvId, cleanUserPrompt, finalReplyText, Math.round(totalMs / 1000), extracted.thinking || "");
+                if (options.allowTranscriptWrite !== false) ensureTranscriptUpdated(resolvedConvId, cleanUserPrompt, finalReplyText, Math.round(totalMs / 1000), thinking);
                 return donePayload;
             }
         } catch (err) {
             if (abortController.signal.aborted) {
-                const cancelError = 'Остановлено пользователем (Stop).';
-                const cancelled = { type: 'done', ok: false, turnId, conversationId: resolvedConvId,
-                    model: cleanModelId, reply: cancelError, error: cancelError,
-                    thinking: '', toolCalls: [], createdDiffs: [], generatedMedia: [] };
-                recordActiveTurnSnapshot(turnId, resolvedConvId, { status: 'cancelled', ...cancelled });
-                try { onEvent(cancelled); } catch (_) {}
-                turnCancellations.delete(turnId);
-                return cancelled;
+                status = 'cancelled';
+                error = 'Остановлено пользователем (Stop).';
+            } else if (err instanceof OpenRouterChatError) {
+                error = err.message;
             }
         } finally {
             turnCancellations.delete(turnId);
         }
     }
 
-    turnCancellations.delete(turnId);
-    const error = orConfig.apiKey ? 'OpenRouter не вернул ответ выбранной модели. Повторите запрос.' : 'Для выбранной модели требуется ключ OpenRouter в настройках.';
     const failure = { type: 'done', ok: false, turnId, conversationId: resolvedConvId,
-        model: cleanModelId, reply: error, error, thinking: '', toolCalls: [], createdDiffs: [], generatedMedia: [] };
-    recordActiveTurnSnapshot(turnId, resolvedConvId, { status: 'failed', ...failure });
-    onEvent(failure);
+        model: cleanModelId, reply: partialReply || error, error, thinking, toolCalls: [], createdDiffs: [], generatedMedia: [] };
+    recordActiveTurnSnapshot(turnId, resolvedConvId, { status, ...failure });
+    try { onEvent(failure); } catch (_) {}
     return failure;
 }
 

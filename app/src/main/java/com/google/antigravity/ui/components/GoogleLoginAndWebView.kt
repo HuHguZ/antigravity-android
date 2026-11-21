@@ -99,7 +99,7 @@ import kotlin.math.sin
 fun ChatGptStyleGoogleLoginScreen(
     pcInstanceName: String,
     isPcBridgeOnline: Boolean,
-    onOpenGoogleOAuthWeb: () -> Unit,
+    onChooseGoogleAccount: () -> Unit,
     onConnectPcSessionNow: () -> Unit,
     onStartPhoneLocalAgent: () -> Unit
 ) {
@@ -157,7 +157,7 @@ fun ChatGptStyleGoogleLoginScreen(
             ) {
                 // 0x7f130f0d: "Продолжить с Google"
                 Button(
-                    onClick = onConnectPcSessionNow,
+                    onClick = onChooseGoogleAccount,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.White,
                         contentColor = Color.Black
@@ -292,7 +292,6 @@ fun AntigravityGoogleWebConsole(
     pcBridgeUrl: String = "",
     activeConversationId: String = "",
     initialUrl: String = "https://antigravity.google.com/",
-    onGoogleLoginDetected: (String) -> Unit,
     onSwitchToNativeChat: () -> Unit
 ) {
     val localEmulatorMirrorUrl = remember(activeConversationId) {
@@ -497,12 +496,7 @@ fun AntigravityGoogleWebConsole(
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 isLoading = false
-                                if (url != null) {
-                                    CookieManager.getInstance().flush()
-                                    if (url.contains("antigravity.google.com") && !url.contains("accounts.google.com")) {
-                                        onGoogleLoginDetected("Аккаунт Google подключён")
-                                    }
-                                }
+                                if (url != null) CookieManager.getInstance().flush()
                             }
 
                             override fun onReceivedError(

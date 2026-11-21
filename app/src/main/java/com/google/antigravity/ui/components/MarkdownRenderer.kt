@@ -1,5 +1,6 @@
 package com.google.antigravity.ui.components
 
+import com.google.antigravity.model.splitCodeAndProse
 import android.content.Context
 import android.content.Intent
 import android.net.Uri

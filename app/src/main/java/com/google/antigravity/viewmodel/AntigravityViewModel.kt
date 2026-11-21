@@ -1,16 +1,19 @@
 package com.google.antigravity.viewmodel
 
 import android.app.Application
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.antigravity.device.PhoneResourceController
 import com.google.antigravity.model.AVAILABLE_AGY_MODELS
+import com.google.antigravity.model.mapToDirectGeminiModelId
 import com.google.antigravity.model.VideoRun
 import com.google.antigravity.model.VideoRunStore
 import com.google.antigravity.network.VideoJobFailure
@@ -109,6 +112,7 @@ import com.google.antigravity.model.QueuedFollowUp
 import com.google.antigravity.model.FollowUpQueue
 import com.google.antigravity.model.ToolCallStatus
 import com.google.antigravity.model.forkMessageVersion
+import com.google.antigravity.model.phoneFallbackTarget
 import com.google.antigravity.model.selectMessageVersion
 import com.google.antigravity.model.conversationExecutionId
 import kotlinx.coroutines.ensureActive
@@ -188,6 +192,18 @@ class AntigravityViewModel internal constructor(application: Application,
         if (next.executionContextId.isNotBlank() && next.executionContextId != conversationExecutionId(next.conversationId, _messages.value)) return
         if (_messages.value.any { it.id == next.id }) { removeQueuedFollowUp(id); return }
         sendUserPrompt(next.prompt, queuedTurn = next)
+    }
+
+    private fun usePhoneToolsForChat(conversationId: String) {
+        val source = _settings.value
+        val phone = AgentExecutionTarget.PHONE_LOCAL_RESOURCES
+        if (source.activeConversationId != conversationId || source.executionTarget != AgentExecutionTarget.PC_REMOTE_SESSION) return
+        _settings.update { it.copy(executionTarget = phone) }
+        _queuedFollowUps.update { queue -> queue.map {
+            if (it.conversationId == conversationId && it.target == source.executionTarget) it.copy(target = phone) else it
+        } }
+        saveFollowUpQueue()
+        cacheCurrentSession()
     }
     private val _chatLibraryPreferences = MutableStateFlow(ChatLibrary.decode(prefs.getString("chat_library_preferences", "{}").orEmpty()))
     val chatLibraryPreferences: StateFlow<Map<String, ChatLibraryPreferences>> = _chatLibraryPreferences.asStateFlow()
@@ -315,7 +331,7 @@ class AntigravityViewModel internal constructor(application: Application,
             activeConversationId = prefs.getString("active_conversation_id", "").orEmpty(),
             activeSessionTitle = prefs.getString("active_session_title", "").orEmpty(),
             executionTarget = runCatching { AgentExecutionTarget.valueOf(prefs.getString("active_execution_target", "PC_REMOTE_SESSION").orEmpty()) }.getOrDefault(AgentExecutionTarget.PC_REMOTE_SESSION),
-            selectedModelId = prefs.getString("selected_model_id", "gemini-4-argon-high") ?: "gemini-4-argon-high",
+            selectedModelId = mapToDirectGeminiModelId(prefs.getString("selected_model_id", null) ?: "gemini-4-argon-high"),
             voiceProvider = runCatching {
                 VoiceProvider.valueOf(prefs.getString("voice_provider", VoiceProvider.NEURAL_BRIDGE.name) ?: VoiceProvider.NEURAL_BRIDGE.name)
             }.getOrDefault(VoiceProvider.NEURAL_BRIDGE),
@@ -828,7 +844,8 @@ class AntigravityViewModel internal constructor(application: Application,
                 ) {
                     val syncRevision = generationRevision
                     val remoteMsgs = backendClient.fetchSessionMessages(s.pcBridgeUrl, convId)
-                    if (_settings.value.activeConversationId != convId || generationRevision != syncRevision || _messages.value.any { it.isStreaming }) continue
+                    if (_settings.value.activeConversationId != convId || _settings.value.executionTarget != s.executionTarget ||
+                        generationRevision != syncRevision || _messages.value.any { it.isStreaming }) continue
                     val curMsgs = _messages.value
                     if (remoteMsgs.isNotEmpty() &&
                         (remoteMsgs.size > curMsgs.size ||
@@ -1035,8 +1052,10 @@ class AntigravityViewModel internal constructor(application: Application,
                 _availableModels.value = models
             }
 
-            val liveSessions = backendClient.fetchRemoteSessions(url)
+            val fetchedSessions = backendClient.fetchRemoteSessions(url)
             if (_settings.value.pcBridgeUrl != url) return@launch
+            val phoneSessionIds = _remoteSessions.value.filter { it.hostType == "PHONE" }.mapTo(mutableSetOf()) { it.id }
+            val liveSessions = fetchedSessions.filterNot { it.id in phoneSessionIds }
             if (liveSessions.isNotEmpty()) {
                 val workingUrl = backendClient.getLastWorkingBridgeUrl()
                 if (workingUrl.startsWith("https://") && workingUrl != _settings.value.pcBridgeUrl) {
@@ -1065,7 +1084,8 @@ class AntigravityViewModel internal constructor(application: Application,
                     if (cached.isEmpty() || cached.size != topSession.messageCount) {
                         val syncRevision = generationRevision
                         val msgs = backendClient.fetchSessionMessages(_settings.value.pcBridgeUrl, topSession.id)
-                        if (msgs.isNotEmpty() && msgs.size >= cached.size && generationRevision == syncRevision) {
+                        if (msgs.isNotEmpty() && msgs.size >= cached.size && generationRevision == syncRevision &&
+                            _remoteSessions.value.none { it.id == topSession.id && it.hostType == "PHONE" }) {
                             val mergedMessages = mergeRemoteChatHistory(cached, msgs)
                             sessionHistoryCache[topSession.id] = mergedMessages
                             if (_settings.value.activeConversationId == topSession.id && _messages.value.none { it.isStreaming }) {
@@ -1586,20 +1606,49 @@ class AntigravityViewModel internal constructor(application: Application,
         _googleProfile.update { it.copy(isSignedIn = false) }
     }
 
-    fun setExecutionTarget(target: AgentExecutionTarget) {
-        _settings.update { it.copy(executionTarget = target) }
-        if (target == AgentExecutionTarget.GOOGLE_WEB_CONSOLE) {
-            _drawerSection.value = DrawerSection.GOOGLE_WEB
+    fun selectGoogleAccount(email: String) {
+        val firstSelection = !_googleProfile.value.isSignedIn
+        val phoneMode = AgentExecutionTarget.PHONE_LOCAL_RESOURCES
+        prefs.edit()
+            .putString("user_email", email)
+            .remove("user_name")
+            .putBoolean("is_signed_in", true)
+            .putBoolean("is_signed_in_v2", true)
+            .apply { if (firstSelection) putString("active_execution_target", phoneMode.name) }
+            .apply()
+        _googleProfile.update { it.copy(isSignedIn = true, email = email, displayName = "") }
+        if (firstSelection) {
+            _settings.update { it.copy(executionTarget = phoneMode) }
+            _drawerSection.value = DrawerSection.CHAT
+            _topModeTab.value = TopModeTab.CHAT
         }
     }
 
+    fun setExecutionTarget(target: AgentExecutionTarget) {
+        if (target == AgentExecutionTarget.GOOGLE_WEB_CONSOLE) {
+            val app = getApplication<Application>()
+            val browser = Intent(Intent.ACTION_VIEW, Uri.parse("https://antigravity.google.com/"))
+                .addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                app.startActivity(browser)
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(app, "Для открытия Antigravity нужен браузер", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        prefs.edit().putString("active_execution_target", target.name).apply()
+        _settings.update { it.copy(executionTarget = target) }
+    }
+
     fun setSelectedModel(modelId: String) {
-        prefs.edit().putString("selected_model_id", modelId).apply()
-        _settings.update { it.copy(selectedModelId = modelId) }
+        val selected = mapToDirectGeminiModelId(modelId)
+        prefs.edit().putString("selected_model_id", selected).apply()
+        _settings.update { it.copy(selectedModelId = selected) }
     }
 
     fun setForcePublicTunnelOnly(enabled: Boolean) {
         remoteSyncJob?.cancel()
+        _pcBridgeStatus.update { it.copy(checked = false) }
         prefs.edit().putBoolean("force_public_tunnel_only", enabled).apply()
         backendClient.forcePublicTunnelOnly = enabled
         voiceEngine.forcePublicTunnelOnly = enabled
@@ -3823,6 +3872,12 @@ class AntigravityViewModel internal constructor(application: Application,
                 activeSessionTitle = prompt.replace(Regex("\\s+"), " ").take(48)
             ) }
         }
+        val source = _settings.value
+        val bridge = _pcBridgeStatus.value
+        if (phoneFallbackTarget(source.executionTarget, bridge.checked && !bridge.connected, source.selectedModelId,
+                source.geminiApiKey, _openRouterApiKey.value) != source.executionTarget) {
+            usePhoneToolsForChat(source.activeConversationId)
+        }
         val currentSettings = _settings.value
         val historySnapshot = chatHistoryForModel(if (versionAnchor != null) _messages.value.dropLast(1) else _messages.value)
         val executionConversationId = conversationExecutionId(currentSettings.activeConversationId, _messages.value)
@@ -3911,6 +3966,7 @@ class AntigravityViewModel internal constructor(application: Application,
             }
             var completedSuccessfully = false
             var completedConversationId = currentSettings.activeConversationId
+            var turnTarget = currentSettings.executionTarget
             try {
                 if (queuedTurn != null) {
                     // Persist delivery before removing durable queued intent. A restart can
@@ -3937,9 +3993,17 @@ class AntigravityViewModel internal constructor(application: Application,
                     extraPhoneContext = combinedExtraContext,
                     transientChat = _temporaryChatActive.value,
                     mcpConnections = _selectedMcpConnections.value.toList(),
+                    onPhoneFallback = {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (turnRevision == generationRevision) {
+                                turnTarget = AgentExecutionTarget.PHONE_LOCAL_RESOURCES
+                                usePhoneToolsForChat(currentSettings.activeConversationId)
+                            }
+                        }
+                    },
                     onStreamingUpdate = { update ->
                         if (turnRevision != generationRevision) return@executeAgentTurn
-                        val nextTools = update.toolCalls.map { it.copy(executionTarget = it.executionTarget ?: currentSettings.executionTarget) }
+                        val nextTools = update.toolCalls.map { it.copy(executionTarget = it.executionTarget ?: turnTarget) }
                         val toolsChanged = nextTools.isNotEmpty() &&
                             nextTools != _messages.value.firstOrNull { it.id == streamingAgentMsgId }?.toolCalls
                         if (update.tokensPerSecond > 0f) {
@@ -3976,6 +4040,7 @@ class AntigravityViewModel internal constructor(application: Application,
                             val stepDesc = when {
                                 update.toolCalls.isNotEmpty() -> "Инструмент: ${update.toolCalls.last().summary}"
                                 update.fullText.isNotBlank() -> "Генерация ответа (${update.fullText.length} симв.)"
+                                update.thinking.isNotBlank() -> "Ход рассуждений"
                                 else -> "Ожидание ответа…"
                             }
                             AntigravityAgentSessionService.updateAgentTurnProgress(
@@ -4021,7 +4086,7 @@ class AntigravityViewModel internal constructor(application: Application,
                                 isThinkingExpanded = msg.isThinkingExpanded,
                                 isStreaming = false,
                                 toolCalls = com.google.antigravity.model.finishTurnTools(msg.toolCalls, result.toolCalls,
-                                    failed = result.isError, target = currentSettings.executionTarget),
+                                    failed = result.isError, target = turnTarget),
                                 createdDiffs = (msg.createdDiffs + result.createdDiffs).distinct(),
                                 generatedMedia = (msg.generatedMedia + result.generatedMedia)
                                     .distinctBy { it.mediaUrl.ifBlank { it.localPhonePath ?: it.fileName } },
@@ -4044,7 +4109,7 @@ class AntigravityViewModel internal constructor(application: Application,
                 }
                 if (resolvedConvId.isNotBlank() && resolvedConvId != currentSettings.activeConversationId) {
                     _queuedFollowUps.update { FollowUpQueue.rebind(it, currentSettings.activeConversationId,
-                        resolvedConvId, currentSettings.executionTarget) }
+                        resolvedConvId, turnTarget) }
                     saveFollowUpQueue()
                     _settings.update {
                         it.copy(
@@ -4071,9 +4136,9 @@ class AntigravityViewModel internal constructor(application: Application,
                                 RemoteSessionItem(
                                     id = resolvedConvId,
                                     title = cleanTitle,
-                                    environment = if (currentSettings.executionTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "Память телефона" else "Удалённая сессия ПК",
-                                    host = if (currentSettings.executionTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "Телефон" else "Компьютер",
-                                    hostType = if (currentSettings.executionTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "PHONE" else "PC",
+                                    environment = if (turnTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "Память телефона" else "Удалённая сессия ПК",
+                                    host = if (turnTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "Телефон" else "Компьютер",
+                                    hostType = if (turnTarget == AgentExecutionTarget.PHONE_LOCAL_RESOURCES) "PHONE" else "PC",
                                     updatedAtMs = System.currentTimeMillis(),
                                     messageCount = _messages.value.size
                                 )
@@ -4082,7 +4147,7 @@ class AntigravityViewModel internal constructor(application: Application,
                     }
                 }
                 cacheCurrentSession()
-                if (currentSettings.executionTarget != AgentExecutionTarget.PHONE_LOCAL_RESOURCES) {
+                if (turnTarget != AgentExecutionTarget.PHONE_LOCAL_RESOURCES) {
                     syncRemoteSessionsFromPc()
                     refreshContextWindowStatus()
                 }
@@ -4105,6 +4170,7 @@ class AntigravityViewModel internal constructor(application: Application,
                     else "Переписка сохранена на телефоне. "
                 val errorText = when {
                     e is com.google.antigravity.network.OpenRouterChatFailure -> e.message.orEmpty()
+                    e is com.google.antigravity.network.GeminiChatFailure -> e.message.orEmpty()
                     offline -> "Связь прервалась — ответ не завершён. " + saved +
                         "Проверьте подключение и нажмите «Повторить»."
                     else -> "Не удалось получить ответ. " + saved + "Попробуйте ещё раз."
@@ -4128,7 +4194,7 @@ class AntigravityViewModel internal constructor(application: Application,
                     if (completedSuccessfully && _settings.value.activeConversationId == completedConversationId) {
                         val completedSession = completedConversationId
                         val next = _queuedFollowUps.value.firstOrNull {
-                            it.conversationId == completedSession && it.target == currentSettings.executionTarget &&
+                            it.conversationId == completedSession && it.target == turnTarget &&
                                 (it.executionContextId.isBlank() || it.executionContextId == conversationExecutionId(completedSession, _messages.value))
                         }
                         if (next != null) viewModelScope.launch { sendQueuedFollowUp(next.id) }
@@ -4366,6 +4432,7 @@ class AntigravityViewModel internal constructor(application: Application,
         if (s.pcBridgeUrl != previousBridgeUrl) {
             remoteSyncJob?.cancel()
             backendClient.clearWorkingBridgeCache()
+            _pcBridgeStatus.update { it.copy(checked = false) }
         }
         prefs.edit()
             .putString("chat_text_size", s.chatTextSize.name)

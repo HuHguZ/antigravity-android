@@ -19,9 +19,12 @@ fun phoneHistoryForModel(messages: List<ChatMessage>, child: Boolean = false): L
         for (tool in message.toolCalls.asReversed()) {
             if (remainingTools == 0) break
             if (tool.executionTarget != AgentExecutionTarget.PHONE_LOCAL_RESOURCES || tool.status.isUnfinished) continue
+            val details = if (tool.toolName == "preview_project" && tool.status == ToolCallStatus.COMPLETED) {
+                "Ссылка на локальное превью была показана пользователю."
+            } else tool.details
             val result = JSONObject().put("id", tool.id.take(120)).put("tool", tool.toolName.take(120))
-                .put("status", tool.status.name).put("result", tool.details.take(2_000))
-                .put("truncated", tool.details.length > 2_000)
+                .put("status", tool.status.name).put("result", details.take(2_000))
+                .put("truncated", details.length > 2_000)
             tool.parentTaskId?.let { result.put("parentTaskId", it.take(120)) }
             val record = result.toString()
             val candidate = header + (selected + record).asReversed().joinToString("\n")

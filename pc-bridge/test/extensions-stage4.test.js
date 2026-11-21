@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { Readable } = require('node:stream');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -336,34 +337,28 @@ for (const needsApproval of [false, true]) test(`адаптер OpenRouter: ре
     const capturedBodies = [];
     let callIdx = 0;
     const toolEvents = [];
-    const mkResp = (obj) => {
-        const handlers = {};
-        const bodyStr = JSON.stringify(obj);
-        setImmediate(() => {
-            if (handlers.data) handlers.data(Buffer.from(bodyStr));
-            if (handlers.end) handlers.end();
-        });
-        return { statusCode: 200, on: (ev, fn) => { handlers[ev] = fn; } };
-    };
+    const mkResp = (obj) => Object.assign(Readable.from([`data: ${JSON.stringify(obj)}\n\ndata: [DONE]\n\n`]), {
+        statusCode: 200, headers: { 'content-type': 'text/event-stream' }
+    });
     const fakeHttps = {
         request: (url, opts, cb) => {
             const r = {
-                on: () => r,
+                once: () => r,
                 destroy: () => {},
-                write: (s) => { capturedBodies.push(JSON.parse(s)); },
-                end: () => {
+                end: (body) => {
+                    capturedBodies.push(JSON.parse(body));
                     callIdx += 1;
                     if (callIdx === 1) {
                         cb(mkResp({
-                            choices: [{ message: { role: 'assistant', content: '', tool_calls: [{
-                                id: 'c1', type: 'function',
+                            choices: [{ delta: { tool_calls: [{
+                                index: 0, id: 'c1', type: 'function',
                                 function: { name: tools[0].function.name, arguments: '{}' }
-                            }] } }],
+                            }] }, finish_reason: 'tool_calls' }],
                             usage: { completion_tokens: 10 }
                         }));
                     } else {
                         cb(mkResp({
-                            choices: [{ message: { role: 'assistant', content: 'ИТОГ: ответ-srvX' } }],
+                            choices: [{ delta: { content: 'ИТОГ: ответ-srvX' }, finish_reason: 'stop' }],
                             usage: { completion_tokens: 20 }
                         }));
                     }
@@ -399,6 +394,7 @@ for (const needsApproval of [false, true]) test(`адаптер OpenRouter: ре
         approvalPreview: require('../lib/tool-approval').approvalPreview,
         findRawMcpEntry: () => null,
         mcpClientLib: require('../lib/mcp-client'),
+        ...require('../lib/openrouter-chat'),
         https: fakeHttps
     };
     const execute = vm.runInNewContext(

@@ -3,9 +3,11 @@ package com.google.antigravity.ui
 import com.google.antigravity.ui.design.DesignColors
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -213,6 +215,17 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
 
     val googleProfile by viewModel.googleProfile.collectAsState()
+    val accountPickerContext = LocalContext.current
+    val googleAccountLauncher = rememberLauncherForActivityResult(remember { GoogleAccountPicker() }) { email ->
+        if (email != null) viewModel.selectGoogleAccount(email)
+    }
+    fun chooseGoogleAccount() {
+        try {
+            googleAccountLauncher.launch(googleProfile.email)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(accountPickerContext, "Системный выбор аккаунта Google недоступен", Toast.LENGTH_LONG).show()
+        }
+    }
     val settings by viewModel.settings.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
     val topModeTab by viewModel.topModeTab.collectAsState()
@@ -377,12 +390,7 @@ fun MainScreen(
         ChatGptStyleGoogleLoginScreen(
             pcInstanceName = pcBridgeStatus.instanceName,
             isPcBridgeOnline = pcBridgeStatus.connected,
-            onOpenGoogleOAuthWeb = {
-                viewModel.signInWithGoogleCompleted(
-                    targetMode = AgentExecutionTarget.GOOGLE_WEB_CONSOLE,
-                    openWebConsoleFirst = true
-                )
-            },
+            onChooseGoogleAccount = ::chooseGoogleAccount,
             onConnectPcSessionNow = {
                 viewModel.signInWithGoogleCompleted(
                     targetMode = AgentExecutionTarget.PC_REMOTE_SESSION,
@@ -549,12 +557,6 @@ fun MainScreen(
                             pcBridgeUrl = settings.pcBridgeUrl,
                             activeConversationId = settings.activeConversationId,
                             initialUrl = settings.antigravityGatewayUrl,
-                            onGoogleLoginDetected = {
-                                viewModel.signInWithGoogleCompleted(
-                                    targetMode = AgentExecutionTarget.PC_REMOTE_SESSION,
-                                    openWebConsoleFirst = false
-                                )
-                            },
                             onSwitchToNativeChat = {
                                 viewModel.selectDrawerSection(DrawerSection.CHAT)
                             }
@@ -706,7 +708,7 @@ fun MainScreen(
                             onOpenPermissions = { showAiPermissionsSheet = true },
                             onUpdate = { transform -> viewModel.updateSettings(transform) },
                             onOpenGoogleWeb = { viewModel.selectDrawerSection(DrawerSection.GOOGLE_WEB) },
-                            onSignOut = { viewModel.signOutGoogle() },
+                            onChangeGoogleAccount = ::chooseGoogleAccount,
                             onOpenDrawer = { scope.launch { drawerState.open() } },
                             onBack = { viewModel.selectDrawerSection(DrawerSection.CHAT) }
                         )
@@ -2818,13 +2820,13 @@ private fun SettingsModalScreen(
     onOpenPermissions: () -> Unit,
     onUpdate: ((AntigravitySettings) -> AntigravitySettings) -> Unit,
     onOpenGoogleWeb: () -> Unit,
-    onSignOut: () -> Unit,
+    onChangeGoogleAccount: () -> Unit,
     onBack: () -> Unit,
     onOpenDrawer: () -> Unit,
     initialPage: String = "Настройки"
 ) {
     com.google.antigravity.ui.components.AppSettingsScreen(
         viewModel, settings, googleEmail, pcInstanceName, onUpdate,
-        onOpenGoogleWeb, onSignOut, onBack, onOpenPermissions, onOpenDrawer, initialPage
+        onOpenGoogleWeb, onChangeGoogleAccount, onBack, onOpenPermissions, onOpenDrawer, initialPage
     )
 }
