@@ -32,7 +32,12 @@ data class ProState(
     /** true — сервер ждёт проект от нас: без него тариф не выдаётся. */
     val needsProject: Boolean = false,
     /** Тариф не выдан: ни текущего тарифа, ни разрешённых нет. */
-    val unlicensed: Boolean = false
+    val unlicensed: Boolean = false,
+    /** Лицензия аккаунта (`fetchLicenses`), если сервер её выдал. */
+    val licenceTier: String = "",
+    val licenceName: String = "",
+    /** true — лицензию узнать не удалось (сеть, маршрут): пустой список ≠ «не выдана». */
+    val licenceUnknown: Boolean = false
 ) {
     val usable: Boolean get() = tierId.isNotBlank() || passedGate
 }
@@ -96,6 +101,13 @@ internal fun parseCodeAssist(json: JSONObject): ProState {
         needsProject = needsProject && !tierPresent,
         unlicensed = !tierPresent && defaultTier.isBlank()
     )
+}
+
+/** Первая лицензия аккаунта: `userTier` и её отображаемое имя. Пусто — лицензии нет. */
+internal fun parseLicence(json: JSONObject): Pair<String, String> {
+    val licences = json.optJSONArray("licenses") ?: return "" to ""
+    val first = licences.optJSONObject(0) ?: return "" to ""
+    return first.optString("userTier") to first.optString("tierDisplayName")
 }
 
 /** Одна строка SSE (`data: {...}`) как JSON; всё остальное — null. */
@@ -169,8 +181,36 @@ class CloudCodeClient(
         val project = state.project.ifBlank { known }
         // Состав моделей есть только в отдельном ответе; тариф его не перечисляет.
         val catalog = runCatching { fetchAvailableModels(project) }.getOrDefault(emptyList())
-        lastState = state.copy(project = project, models = (catalog + state.models).distinct())
+        val (licenceTier, licenceName) = runCatching { fetchLicences() }.getOrElse { null to null }
+        lastState = state.copy(
+            project = project,
+            models = (catalog + state.models).distinct(),
+            licenceTier = licenceTier ?: state.licenceTier,
+            licenceName = licenceName ?: state.licenceName,
+            licenceUnknown = licenceTier == null,
+            tierName = state.tierName.ifBlank { licenceName.orEmpty() },
+            // Лицензия важнее каталога тарифов: она и есть право на генерацию.
+            unlicensed = licenceTier != null && licenceTier.isBlank() && state.unlicensed
+        )
         lastState!!
+    }
+
+    /**
+     * Лицензия аккаунта (`GET v1alpha:fetchLicenses`).
+     *
+     * Это единственный честный источник «есть ли право на модели»: `currentTier`
+     * в `loadCodeAssist` — каталог тарифов, а не выданная лицензия. Без лицензии
+     * генерация отвечает `403 #3501`, поэтому пустой ответ — не мелочь.
+     */
+    suspend fun fetchLicences(): Pair<String, String> = withContext(Dispatchers.IO) {
+        val raw = call(
+            GoogleProConfig.LICENCES_PATH,
+            JSONObject(),
+            stream = false,
+            hosts = listOf(GoogleProConfig.AICODE_HOST),
+            method = "GET"
+        )
+        parseLicence(runCatching { JSONObject(raw) }.getOrNull() ?: JSONObject())
     }
 
     /**
@@ -248,18 +288,34 @@ class CloudCodeClient(
         val text = StringBuilder()
         val thinking = StringBuilder()
         var tokens = 0
-        call("v1internal:streamGenerateContent?alt=sse", body, stream = true) { chunk ->
-            currentCoroutineContext().ensureActive()
-            val (answer, thoughts) = collectChunkText(chunk)
-            if (thoughts.isNotBlank()) {
-                thinking.append(thoughts)
-                onThinking(thinking.toString().trim())
-            }
-            text.append(answer)
-            val usage = outputTokensOf(chunk)
-            if (usage > 0) tokens = usage
-            chunk.optJSONObject("error")?.let { error ->
-                throw GeminiChatFailure(error.optInt("code", 0), error.optString("message", "CloudCode вернул ошибку"))
+        var retried = false
+        while (true) {
+            try {
+                call("v1internal:streamGenerateContent?alt=sse", body, stream = true) { chunk ->
+                    currentCoroutineContext().ensureActive()
+                    val (answer, thoughts) = collectChunkText(chunk)
+                    if (thoughts.isNotBlank()) {
+                        thinking.append(thoughts)
+                        onThinking(thinking.toString().trim())
+                    }
+                    text.append(answer)
+                    val usage = outputTokensOf(chunk)
+                    if (usage > 0) tokens = usage
+                    chunk.optJSONObject("error")?.let { error ->
+                        throw GeminiChatFailure(error.optInt("code", 0), error.optString("message", "CloudCode вернул ошибку"))
+                    }
+                }
+                break
+            } catch (failure: GeminiChatFailure) {
+                // Лицензию могли выдать или продлить только что: перечитываем её и
+                // повторяем ход один раз, прежде чем показывать отказ человеку.
+                val licenceMissing = failure.status == 403 &&
+                    (failure.message ?: "").contains("лицензия", ignoreCase = true)
+                if (retried || !licenceMissing) throw failure
+                retried = true
+                text.setLength(0)
+                thinking.setLength(0)
+                runCatching { fetchLicences() }
             }
         }
         ProviderReply(text.toString().trim(), thinking.toString().trim()) to tokens
@@ -271,10 +327,11 @@ class CloudCodeClient(
         path: String,
         body: JSONObject,
         stream: Boolean,
+        hosts: List<String> = listOf(GoogleProConfig.PRIMARY_HOST, GoogleProConfig.SECONDARY_HOST),
+        method: String = "POST",
         onChunk: suspend (JSONObject) -> Unit = {}
     ): String {
         val access = tokens.accessToken()
-        val hosts = listOf(GoogleProConfig.PRIMARY_HOST, GoogleProConfig.SECONDARY_HOST)
         var lastRefusal: String? = null
         var lastError: Exception? = null
         for (host in hosts) {
@@ -282,7 +339,7 @@ class CloudCodeClient(
                 currentCoroutineContext().ensureActive()
                 val started = System.currentTimeMillis()
                 try {
-                    val result = attempt(host, path, body, access, route, stream, onChunk)
+                    val result = attempt(host, path, body, access, route, stream, method, onChunk)
                     ledger.success(route, System.currentTimeMillis() - started)
                     return result
                 } catch (failure: GateRefusal) {
@@ -314,9 +371,10 @@ class CloudCodeClient(
         access: String,
         route: GateRoute,
         stream: Boolean,
+        method: String,
         onChunk: suspend (JSONObject) -> Unit
     ): String {
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("https://$host/$path")
             .header("Authorization", "Bearer $access")
             .header("User-Agent", GoogleProConfig.USER_AGENT)
@@ -326,8 +384,11 @@ class CloudCodeClient(
             // проекте право `serviceusage.services.use`, и без него отвечает 403
             // «Caller does not have required permission to use project …». Проект
             // достаточно передавать полем в теле — так запрос проходит.
-            .post(body.toString().toRequestBody(jsonMedia))
-            .build()
+        // `User-Agent` — не украшение: сервер узнаёт клиента именно по нему и без
+        // слова `antigravity` отвечает `403 #3501 SUBSCRIPTION_REQUIRED`, даже когда
+        // лицензия у аккаунта есть.
+        val request = if (method == "GET") builder.get().build()
+        else builder.post(body.toString().toRequestBody(jsonMedia)).build()
         clientFor(route).newCall(request).execute().use { response ->
             if (response.code == 400 || response.code == 403) {
                 val errorBody = response.body?.string().orEmpty()

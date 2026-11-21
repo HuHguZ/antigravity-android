@@ -72,6 +72,27 @@ internal object GoogleProConfig {
     const val PRIMARY_HOST = "daily-cloudcode-pa.googleapis.com"
     const val SECONDARY_HOST = "cloudcode-pa.googleapis.com"
 
+    /**
+     * Хост лицензий и конфигурации. Именно он отвечает за то, есть ли у аккаунта
+     * право на модели: без лицензии `streamGenerateContent` отвечает
+     * `403 #3501 SUBSCRIPTION_REQUIRED`. Метод вызывается **GET** — POST на тот же
+     * путь даёт обычный HTML-404, на этом легко обмануться.
+     */
+    const val AICODE_HOST = "aicode.googleapis.com"
+    const val LICENCES_PATH = "v1alpha:fetchLicenses"
+
+    /**
+     * Обычные DoH-резолверы — второй уровень. Провайдеры обхода (`dns-ai`,
+     * `eu.geohide`) отвечают на закрытые хосты адресом **127.65.71.x**: это их
+     * локальный прокси, он жив только на компьютере, где тот запущен. На телефоне
+     * такой адрес указывает в пустоту, поэтому такие ответы заменяются настоящими
+     * адресами Google через обычный DoH — TLS всё равно проверяет имя.
+     */
+    val PLAIN_DOH = listOf(
+        "https://dns.google/resolve?name=%s&type=A",
+        "https://cloudflare-dns.com/dns-query?name=%s&type=A"
+    )
+
     /** Локальный префикс идентификаторов моделей: `google-pro/<серверное имя>`. */
     const val MODEL_PREFIX = "google-pro/"
 

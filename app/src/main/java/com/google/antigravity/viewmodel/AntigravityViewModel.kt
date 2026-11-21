@@ -841,7 +841,8 @@ class AntigravityViewModel internal constructor(application: Application,
                         signedIn = true,
                         email = googlePro.email.ifBlank { it.email },
                         tier = state.tierName,
-                        models = com.google.antigravity.googlepro.googleProModelOptions(state.models),
+                        plan = state.licenceName.ifBlank { "Google AI Pro" },
+                        models = com.google.antigravity.googlepro.googleProModelOptions(state.models, state.licenceName),
                         ineligible = state.ineligibleReasons.joinToString("; "),
                         route = googlePro.routeSummary(),
                         diagnostics = googlePro.diagnostics()
@@ -4610,3 +4611,4 @@ class AntigravityViewModel internal constructor(application: Application,
         voiceEngine.release()
     }
 }
+

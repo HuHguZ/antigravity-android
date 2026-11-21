@@ -302,7 +302,8 @@ fun AppSettingsScreen(
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             if (pro.signedIn) {
                                 Text(pro.email.ifBlank { "Аккаунт подключён" }, color = Color.White, fontSize = 16.sp)
-                                if (pro.tier.isNotBlank()) Text("Тариф: ${pro.tier}", color = SettingsMuted, fontSize = 13.sp)
+                                Text("Подписка: ${pro.plan}", color = SettingsMuted, fontSize = 13.sp)
+                                if (pro.tier.isNotBlank()) Text("Тариф сервера: ${pro.tier}", color = SettingsMuted, fontSize = 13.sp)
                                 if (pro.ineligible.isNotBlank()) Text("Проверка региона: ${pro.ineligible}", color = SettingsMuted, fontSize = 13.sp)
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     OutlinedButton(onClick = { viewModel.refreshGooglePro() }, enabled = !pro.busy) {

@@ -47,6 +47,12 @@ internal fun classifyAnswer(
     return if (provider == reference) AnswerKind.PASSTHROUGH else AnswerKind.SUBSTITUTED
 }
 
+/** Адрес из 127/8 — локальный прокси провайдера, на телефоне он недостижим. */
+internal fun isLocalOnly(address: String): Boolean = address.startsWith("127.")
+
+internal fun usableAddresses(addresses: List<String>): List<String> =
+    addresses.filter { it.isNotBlank() && !isLocalOnly(it) }
+
 /**
  * Разрешение хостов CloudCode по выбранному маршруту.
  *
@@ -79,9 +85,11 @@ class RegionGateResolver(
 
     fun resolve(host: String, route: GateRoute): Verdict? {
         if (route == GateRoute.DIRECT) {
-            val addresses = runCatching { Dns.SYSTEM.lookup(host).map { it.hostAddress ?: "" } }.getOrDefault(emptyList())
-            return addresses.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
-                ?.let { Verdict(it, AnswerKind.PASSTHROUGH) }
+            val system = runCatching { Dns.SYSTEM.lookup(host).map { it.hostAddress ?: "" } }.getOrDefault(emptyList())
+            // Системный DNS на телефоне часто отдаёт заглушку DPI (127.65.71.x):
+            // тогда прямой путь оживает только через обычный DoH.
+            val addresses = usableAddresses(system).ifEmpty { queryPlainDoh(host) }
+            return addresses.takeIf { it.isNotEmpty() }?.let { Verdict(it, AnswerKind.PASSTHROUGH) }
         }
         val key = "${route.name}|$host"
         cache[key]?.let { if (System.currentTimeMillis() - it.at < CHOICE_TTL_MS) return it.verdict }
@@ -91,7 +99,11 @@ class RegionGateResolver(
             GateRoute.DIRECT -> emptyList()
         }
         val kind = classifyAnswer(provider, referenceFor(host))
-        val verdict = Verdict(provider, kind).takeIf { kind != AnswerKind.NONE }
+        // Провайдер ответил своим локальным прокси — на телефоне он не работает,
+        // значит нужен настоящий адрес, иначе маршрут провалится на соединении.
+        val usable = usableAddresses(provider).ifEmpty { queryPlainDoh(host) }
+        val verdict = Verdict(usable, if (kind == AnswerKind.NONE && usable.isNotEmpty()) AnswerKind.SUBSTITUTED else kind)
+            .takeIf { it.addresses.isNotEmpty() }
         cache[key] = Cached(verdict ?: Verdict(emptyList(), AnswerKind.NONE), System.currentTimeMillis())
         return verdict
     }
@@ -134,8 +146,37 @@ class RegionGateResolver(
         }
     }.getOrDefault(emptyList())
 
-    private fun queryUdp(host: String, servers: List<String>): List<String> {
-        val id = udpIds.incrementAndGet() and 0xFFFF
+    /**
+     * Обычный DoH (JSON-ответ). Нужен, когда провайдеры обхода или системный DNS
+     * отдают заглушку: настоящий адрес Google годится для прямого TLS-соединения.
+     */
+    private fun queryPlainDoh(host: String): List<String> {
+        for (template in GoogleProConfig.PLAIN_DOH) {
+            val answer = runCatching {
+                val request = Request.Builder()
+                    .url(template.format(host))
+                    .header("Accept", "application/dns-json")
+                    .get()
+                    .build()
+                dohClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) return@use emptyList()
+                    val json = runCatching { org.json.JSONObject(body) }.getOrNull() ?: return@use emptyList()
+                    val answers = json.optJSONArray("Answer") ?: return@use emptyList()
+                    buildList {
+                        for (i in 0 until answers.length()) {
+                            val item = answers.optJSONObject(i) ?: continue
+                            if (item.optInt("type") == 1) add(item.optString("data"))
+                        }
+                    }
+                }
+            }.getOrDefault(emptyList())
+            if (usableAddresses(answer).isNotEmpty()) return answer
+        }
+        return emptyList()
+    }
+
+    private fun queryUdp(host: String, servers: List<String>): List<String> {        val id = udpIds.incrementAndGet() and 0xFFFF
         val query = DnsWire.query(id, host)
         for (server in servers) {
             val answer = runCatching {

@@ -13,6 +13,8 @@ data class GoogleProUiState(
     val signedIn: Boolean = false,
     val email: String = "",
     val tier: String = "",
+    /** Название лицензии для подписей: «Google AI Ultra», «Google AI Pro». */
+    val plan: String = "",
     val models: List<AntigravityModelOption> = emptyList(),
     val ineligible: String = "",
     val route: String = "",

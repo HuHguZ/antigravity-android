@@ -46,6 +46,13 @@ class GoogleProProvider(context: Context) {
         if (tokens.project.isNotBlank()) appendLine("Проект тарифа: ${tokens.project}")
         lastState?.let { state ->
             appendLine("Тариф: ${state.tierName.ifBlank { "не назван" }}")
+            appendLine(
+                when {
+                    state.licenceTier.isNotBlank() -> "Лицензия: ${state.licenceName.ifBlank { state.licenceTier }}"
+                    state.licenceUnknown -> "Лицензия: не удалось узнать (сеть или маршрут)"
+                    else -> "Лицензия: не выдана"
+                }
+            )
             if (state.ineligibleReasons.isNotEmpty()) appendLine("Проверка региона: ${state.ineligibleReasons.joinToString("; ")}")
             if (state.models.isNotEmpty()) appendLine("Модели сервера: ${state.models.joinToString(", ")}")
         }
@@ -54,12 +61,13 @@ class GoogleProProvider(context: Context) {
     val lastState: ProState? get() = client.lastState
 
     /**
-     * Проверка входа. Если сервер требует назвать проект, онбординг выполняется
-     * здесь же — иначе каждая генерация упиралась бы в «нет лицензии».
+     * Проверка входа. Если сервер требует назвать проект и лицензии при этом нет,
+     * онбординг выполняется здесь же. Когда лицензия уже выдана, проект не нужен:
+     * генерация проходит и без него, а подбор проекта упирается в чужие права.
      */
     suspend fun check(): ProState {
         var state = client.loadCodeAssist()
-        if (state.needsProject) {
+        if (state.needsProject && state.licenceTier.isBlank()) {
             val project = tokens.project.ifBlank { projects.firstProject(tokens.accessToken()) }
             if (project.isNotBlank()) {
                 client.onboard(project, state.defaultTierId.ifBlank { "standard-tier" })

@@ -870,6 +870,7 @@ fun MainScreen(
                 proModels = proState.models,
                 proSignedIn = proState.signedIn,
                 proEmail = proState.email,
+                proPlan = proState.plan,
                 onDismiss = { showModelPickerDialog = false }
             )
         }

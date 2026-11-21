@@ -33,7 +33,8 @@ fun ConversationModelSheet(
     onDismiss: () -> Unit,
     proModels: List<AntigravityModelOption> = emptyList(),
     proSignedIn: Boolean = false,
-    proEmail: String = ""
+    proEmail: String = "",
+    proPlan: String = "Google AI Pro"
 ) {
     val models = modelPickerOptions(availableModels, settings.selectedModelId, settings.selectedModelDisplay, proModels)
     ModalBottomSheet(onDismissRequest = onDismiss,
@@ -59,7 +60,7 @@ fun ConversationModelSheet(
                 }
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DesignColors.Border)
                 if (proModels.isNotEmpty()) {
-                    ModelSectionLabel(if (proSignedIn) "Google AI Pro · ${proEmail.ifBlank { "аккаунт" }}" else "Google AI Pro")
+                    ModelSectionLabel(if (proSignedIn) "$proPlan · ${proEmail.ifBlank { "аккаунт" }}" else proPlan)
                     Column(Modifier.selectableGroup()) {
                         proModels.forEach { model ->
                             ModelChoice(model.displayName, model.badge, settings.selectedModelId == model.id) {
@@ -122,3 +123,4 @@ private fun ModelChoice(title: String, detail: String, selected: Boolean, onClic
         }
     }
 }
+

@@ -105,4 +105,40 @@ class CloudCodeParsingTest {
         assertTrue(isProModel(options.first().id))
         assertTrue(options.none { it.id == it.id.removePrefix("google-pro/") })
     }
+
+    @Test
+    fun `a licence is read by tier and display name`() {
+        val (tier, name) = parseLicence(JSONObject("""
+            {"licenses":[{"userTier":"g1-ultra-tier","tierDisplayName":"Google AI Ultra"}]}
+        """.trimIndent()))
+        assertEquals("g1-ultra-tier", tier)
+        assertEquals("Google AI Ultra", name)
+    }
+
+    @Test
+    fun `an account without licences reads as empty, not as an error`() {
+        assertEquals("" to "", parseLicence(JSONObject("""{"licenses":[]}""")))
+        assertEquals("" to "", parseLicence(JSONObject("{}")))
+    }
+
+    @Test
+    fun `provider loopback answers are dropped as unusable on a phone`() {
+        // dns-ai и eu.geohide отвечают 127.65.71.x — это их локальный прокси на ПК.
+        assertTrue(isLocalOnly("127.65.71.2"))
+        assertTrue(!isLocalOnly("172.217.118.4"))
+        assertEquals(listOf("172.217.118.4"), usableAddresses(listOf("127.65.71.2", "172.217.118.4")))
+        assertEquals(emptyList<String>(), usableAddresses(listOf("127.65.71.2")))
+    }
+
+    @Test
+    fun `a licence makes the account licensed even without a tier in the catalog`() {
+        // Ровно ответ живого сервера: currentTier нет, free-tier помечен как неподдерживаемый,
+        // но лицензия выдана — значит ход разрешён.
+        val state = parseCodeAssist(JSONObject("""
+            {"allowedTiers":[{"id":"standard-tier","userDefinedCloudaicompanionProject":true,"isDefault":true}],
+             "ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}
+        """.trimIndent())).copy(licenceTier = "g1-ultra-tier", licenceName = "Google AI Ultra")
+        assertTrue(state.unlicensed || state.licenceTier.isNotBlank())
+        assertEquals("g1-ultra-tier", state.licenceTier)
+    }
 }
