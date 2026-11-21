@@ -1589,6 +1589,24 @@ class AntigravityViewModel internal constructor(application: Application,
         _googleProfile.update { it.copy(isSignedIn = false) }
     }
 
+    fun selectGoogleAccount(email: String) {
+        val firstSelection = !_googleProfile.value.isSignedIn
+        val phoneMode = AgentExecutionTarget.PHONE_LOCAL_RESOURCES
+        prefs.edit()
+            .putString("user_email", email)
+            .remove("user_name")
+            .putBoolean("is_signed_in", true)
+            .putBoolean("is_signed_in_v2", true)
+            .apply { if (firstSelection) putString("active_execution_target", phoneMode.name) }
+            .apply()
+        _googleProfile.update { it.copy(isSignedIn = true, email = email, displayName = "") }
+        if (firstSelection) {
+            _settings.update { it.copy(executionTarget = phoneMode) }
+            _drawerSection.value = DrawerSection.CHAT
+            _topModeTab.value = TopModeTab.CHAT
+        }
+    }
+
     fun setExecutionTarget(target: AgentExecutionTarget) {
         if (target == AgentExecutionTarget.GOOGLE_WEB_CONSOLE) {
             val app = getApplication<Application>()

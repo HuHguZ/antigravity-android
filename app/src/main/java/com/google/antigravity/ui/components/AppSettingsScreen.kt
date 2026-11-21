@@ -62,7 +62,7 @@ fun AppSettingsScreen(
     viewModel: AntigravityViewModel, settings: AntigravitySettings,
     googleEmail: String, pcInstanceName: String,
     onUpdate: ((AntigravitySettings) -> AntigravitySettings) -> Unit,
-    onOpenGoogleWeb: () -> Unit, onSignOut: () -> Unit, onBack: () -> Unit,
+    onOpenGoogleWeb: () -> Unit, onChangeGoogleAccount: () -> Unit, onBack: () -> Unit,
     onOpenPermissions: () -> Unit, onOpenDrawer: () -> Unit = onBack,
     initialPage: String = "Настройки"
 ) {
@@ -329,9 +329,14 @@ fun AppSettingsScreen(
                     }, modifier = Modifier.fillMaxWidth()) { Text("Открыть настройки Android") }
                 }
                 if (page == "Профиль" || page == "Аккаунт") {
-                    SettingsGroup("Google") { Text(googleEmail.ifBlank { "Вход не выполнен" }, color = Color.White, modifier = Modifier.padding(16.dp)) }
-                    OutlinedButton(onClick = onOpenGoogleWeb, modifier = Modifier.fillMaxWidth()) { Text("Открыть веб-сессию") }
-                    TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Text("Сменить аккаунт") }
+                    SettingsGroup("Аккаунт Google на телефоне") {
+                        Text(googleEmail.ifBlank { "Аккаунт не выбран" }, color = Color.White, modifier = Modifier.padding(16.dp))
+                    }
+                    OutlinedButton(onClick = onChangeGoogleAccount, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (googleEmail.isBlank()) "Выбрать аккаунт Google" else "Сменить аккаунт")
+                    }
+                    SettingsNote("Вход в Antigravity Hub выполняется в браузере.")
+                    LocalAntigravityButton(onOpened = {})
                     SettingsGroup("На этом устройстве") {
                         Text("Antigravity · ${BuildConfig.VERSION_NAME}", color = DesignColors.TextPrimary, modifier = Modifier.padding(16.dp))
                     }

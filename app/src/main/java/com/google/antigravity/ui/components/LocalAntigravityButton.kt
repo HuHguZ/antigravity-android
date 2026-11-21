@@ -38,7 +38,10 @@ internal fun LocalAntigravityButton(onOpened: () -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
     TextButton(onClick = { showDialog = true }) { Text("Открыть Antigravity") }
     if (showDialog) {
-        LocalAntigravityDialog(onDismiss = { showDialog = false }, onOpened = onOpened)
+        LocalAntigravityDialog(onDismiss = { showDialog = false }, onOpened = {
+            showDialog = false
+            onOpened()
+        })
     }
 }
 
