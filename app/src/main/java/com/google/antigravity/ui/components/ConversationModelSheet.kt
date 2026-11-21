@@ -49,6 +49,7 @@ fun ConversationModelSheet(
                         ModelChoice(label, "", settings.executionTarget == target) { onSelectTarget(target) }
                     }
                 }
+                LocalAntigravityButton(onOpened = onDismiss)
                 TextButton(onClick = { onSelectTarget(AgentExecutionTarget.GOOGLE_WEB_CONSOLE) }) {
                     Text("Облако Pro · без ПК")
                 }
