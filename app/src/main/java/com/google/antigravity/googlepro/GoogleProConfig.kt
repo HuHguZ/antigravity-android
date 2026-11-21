@@ -127,27 +127,6 @@ internal object GoogleProConfig {
     val REFERENCE_STUBS = listOf("8.6.112.0", "8.47.69.0")
 
     /**
-     * Модели на случай, если `loadCodeAssist` не перечислил состава тарифа.
-     * Серверный список всегда важнее: имена ниже — только стартовая догадка.
-     */
-    /**
-     * Модели на случай, если `loadCodeAssist` не перечислил состава тарифа.
-     * Серверный список всегда важнее: имена ниже — только стартовая догадка.
-     * Набор сверен с ответом `fetchAvailableModels` (2026-11-21): имена вида
-     * `gemini-4-argon-*` сервер не знает, генерация на них — 404.
-     */
-    val FALLBACK_MODELS = listOf(
-        "gemini-3.8-flash-high",
-        "gemini-3.8-flash-medium",
-        "gemini-3.8-flash-low",
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash",
-        "gemini-4-hydrogen-sonar",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash"
-    )
-
-    /**
      * Версия настольного клиента, которую CloudCode считает своей.
      *
      * Не версия приложения: сервер сверяет номер и отказывает старым сборкам
@@ -156,7 +135,16 @@ internal object GoogleProConfig {
      */
     const val IDE_VERSION = "44.9.1"
 
-    val USER_AGENT = "Antigravity/$IDE_VERSION (android; ${com.google.antigravity.BuildConfig.VERSION_NAME})"
+    /**
+     * Клиентский идентификатор CloudCode. Сервер отдаёт каталог моделей и
+     * допускает генерацию **по этой строке**: с видом «Antigravity/44.9.1 (android…)»
+     * каталог урезается до мобильных 18 моделей без семейств Gemini 4, а
+     * `gemini-4-*` отвечает 404; с идентичностью хаба (`antigravity/hub/…`,
+     * `aidev_client`) приходит весь состав подписки и Gemini 4 отвечает.
+     * Платформа указана честно — android; версия и changelist совпадают с
+     * настольным хабом, потому что набор моделей привязан именно к ним.
+     */
+    val USER_AGENT = "antigravity/hub/2.34.0 (aidev_client; os_type=android; arch=arm64; cl=1026637980)"
 
     /** Тип запроса-чата: обычный ход, а не служебная проверка контекста. */
     const val REQUEST_TYPE = "CHAT_MESSAGE_REQUEST_TYPE_GENERAL"

@@ -34,9 +34,11 @@ fun ConversationModelSheet(
     proModels: List<AntigravityModelOption> = emptyList(),
     proSignedIn: Boolean = false,
     proEmail: String = "",
-    proPlan: String = "Google AI Pro"
+    proPlan: String = ""
 ) {
+    // Подписка — единственный источник списка: модели не из подписки не показываются.
     val models = modelPickerOptions(availableModels, settings.selectedModelId, settings.selectedModelDisplay, proModels)
+    val planTitle = proPlan.ifBlank { "подписка Google" }
     ModalBottomSheet(onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = DesignColors.Bg, contentColor = DesignColors.TextPrimary,
@@ -60,37 +62,38 @@ fun ConversationModelSheet(
                 }
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DesignColors.Border)
                 if (proModels.isNotEmpty()) {
-                    ModelSectionLabel(if (proSignedIn) "$proPlan · ${proEmail.ifBlank { "аккаунт" }}" else proPlan)
+                    // Каталог подписки загружен: показываем только его. Ничего
+                    // лишнего — ни догадок, ни моделей по ключам API.
+                    ModelSectionLabel(if (proSignedIn) "$planTitle · ${proEmail.ifBlank { "аккаунт" }}" else planTitle)
                     Column(Modifier.selectableGroup()) {
-                        proModels.forEach { model ->
+                        models.forEach { model ->
+                            ModelChoice(model.displayName, model.badge, settings.selectedModelId == model.id) {
+                                onSelectModel(model.id)
+                            }
+                        }
+                    }
+                } else {
+                    TextButton(onClick = onOpenGooglePro) { Text("Подключить подписку Google") }
+                    ModelSectionLabel("Модель")
+                    Column(Modifier.selectableGroup()) {
+                        models.forEach { model ->
                             ModelChoice(model.displayName, model.badge, settings.selectedModelId == model.id) {
                                 onSelectModel(model.id)
                             }
                         }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DesignColors.Border)
-                } else {
-                    TextButton(onClick = onOpenGooglePro) { Text("Подключить Google AI Pro (подписка)") }
-                }
-                ModelSectionLabel("Модель")
-                Column(Modifier.selectableGroup()) {
-                    models.forEach { model ->
-                        ModelChoice(model.displayName, model.badge, settings.selectedModelId == model.id) {
-                            onSelectModel(model.id)
+                    Surface(onClick = onOpenOpenRouterCatalog, color = DesignColors.Surface,
+                        shape = RoundedCornerShape(14.dp)) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("OpenRouter", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                                Text(if (openRouterTotalCount > 0) "Каталог · $openRouterTotalCount моделей" else "Каталог моделей",
+                                    color = DesignColors.TextSecondary, fontSize = 13.sp)
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
                         }
-                    }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DesignColors.Border)
-                Surface(onClick = onOpenOpenRouterCatalog, color = DesignColors.Surface,
-                    shape = RoundedCornerShape(14.dp)) {
-                    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("OpenRouter", fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text(if (openRouterTotalCount > 0) "Каталог · $openRouterTotalCount моделей" else "Каталог моделей",
-                                color = DesignColors.TextSecondary, fontSize = 13.sp)
-                        }
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
                     }
                 }
             }
@@ -123,4 +126,3 @@ private fun ModelChoice(title: String, detail: String, selected: Boolean, onClic
         }
     }
 }
-

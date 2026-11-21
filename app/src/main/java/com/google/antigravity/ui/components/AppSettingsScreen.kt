@@ -96,6 +96,9 @@ fun AppSettingsScreen(
     }
     val bridge by viewModel.pcBridgeStatus.collectAsState()
     val pro by viewModel.googleProState.collectAsState()
+    // Название в подписях — из лицензии аккаунта («Google AI Ultra», …),
+    // а не захардкоженное «Google AI Pro».
+    val proPlanTitle = if (pro.signedIn && pro.plan.isNotBlank()) pro.plan else "Подписка Google"
     val verifying by viewModel.isVerifyingApiKey.collectAsState()
     val verification by viewModel.apiKeyVerificationMessage.collectAsState()
     val verified by viewModel.apiKeyVerificationOk.collectAsState()
@@ -120,7 +123,12 @@ fun AppSettingsScreen(
         else -> "Нет подключения"
     }
     Column(Modifier.fillMaxSize().background(DesignColors.Bg).systemBarsPadding().imePadding()) {
-        ReferencePageHeader(if (page == "Аккаунт") "Профиль" else page,
+        ReferencePageHeader(
+            when (page) {
+                "Аккаунт" -> "Профиль"
+                "Google AI Pro" -> proPlanTitle
+                else -> page
+            },
             navigationIcon = {
                 IconButton(onClick = if (root) onOpenDrawer else back) {
                     Icon(if (root) Icons.Default.Menu else Icons.AutoMirrored.Filled.ArrowBack,
@@ -188,7 +196,7 @@ fun AppSettingsScreen(
                     SettingsGroup("") {
                         SettingsLink("Модели и ключи", "", icon = Icons.Default.Tune) { page = "Модели и ключи" }
                         SettingsRule()
-                        SettingsLink("Google AI Pro", if (pro.signedIn) pro.email else "подписка", icon = Icons.Default.Badge) { page = "Google AI Pro" }
+                        SettingsLink(proPlanTitle, if (pro.signedIn) pro.email else "подписка", icon = Icons.Default.Badge) { page = "Google AI Pro" }
                         SettingsRule()
                         SettingsLink("Подключение к ПК", if (bridge.connected) "Подключено" else "", icon = Icons.Default.Computer) { page = "Подключение к ПК" }
                     }
@@ -294,7 +302,7 @@ fun AppSettingsScreen(
                 }
                 if (page == "Google AI Pro") {
                     var tokenDraft by remember { mutableStateOf("") }
-                    SettingsNote("Модели Google AI Pro работают по подписке аккаунта Google, без ключа API и без ПК. " +
+                    SettingsNote("Модели подписки работают по аккаунту Google, без ключа API и без ПК. " +
                         "Вход — в системном браузере; токен хранится только на телефоне. " +
                         "Если Google отвечает «User location is not supported», включённый DNS-обход отправляет запросы " +
                         "через резолвер с адресом в разрешённом регионе: TLS не расшифровывается, сертификат проверяется по имени.")
@@ -316,7 +324,7 @@ fun AppSettingsScreen(
                                     modifier = Modifier.fillMaxWidth()) {
                                     Text(if (pro.busy) "Ожидание браузера…" else "Войти через Google")
                                 }
-                                TextButton(onClick = { open("https://one.google.com/about/plans") }) { Text("Что входит в Google AI Pro") }
+                                TextButton(onClick = { open("https://one.google.com/about/plans") }) { Text("Что входит в подписку Google") }
                             }
                             if (pro.error.isNotBlank()) Text(pro.error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                         }

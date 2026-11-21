@@ -34,4 +34,20 @@ class ModelPickerOptionsTest {
         assertEquals("custom", result.first().id)
         assertTrue(result.containsAll(AVAILABLE_AGY_MODELS))
     }
+
+    @Test fun subscriptionCatalogListsNothingButTheSubscription() {
+        val pro = listOf(
+            AntigravityModelOption("google-pro/gemini-4-argon-high", "Gemini 4 Argon (High)", "подписка"),
+            AntigravityModelOption("google-pro/gemini-4-neon-low", "Gemini 4 Neon (Low)", "подписка")
+        )
+        val result = modelPickerOptions(AVAILABLE_AGY_MODELS, "google-pro/gemini-4-argon-high", "Gemini 4 Argon (High)", pro)
+        assertEquals(listOf("google-pro/gemini-4-argon-high", "google-pro/gemini-4-neon-low"), result.map { it.id })
+    }
+
+    @Test fun subscriptionCatalogStillPinsASelectionFromOutsideTheSubscription() {
+        val pro = listOf(AntigravityModelOption("google-pro/gemini-4-argon-high", "Gemini 4 Argon (High)", "подписка"))
+        val result = modelPickerOptions(emptyList(), "openrouter/vendor/custom-model", "custom-model", pro)
+        assertEquals("openrouter/vendor/custom-model", result.first().id)
+        assertEquals(2, result.size)
+    }
 }

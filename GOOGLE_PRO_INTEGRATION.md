@@ -52,10 +52,13 @@ Gemini API, без ПК-моста, без VPN и без смены регион
 Сверено запросами с токеном устройства, часть — перехватом собственного трафика
 настольного клиента; всё ниже — не догадки:
 
-* **Клиента узнают по `User-Agent`.** Без слова `antigravity` в заголовке сервер
-  отвечает `403 #3501 SUBSCRIPTION_REQUIRED` даже при выданной лицензии: `okhttp/…`
-  и `aidev_client` без имени продукта не годятся, `antigravity/44.9.1 (android)`
-  и клиентский `antigravity/hub/2.34.0 (aidev_client; …)` проходят.
+* **Клиента узнают по `User-Agent`, и от него же зависит каталог.** Без слова
+  `antigravity` сервер отвечает `403 #3501 SUBSCRIPTION_REQUIRED` даже при
+  выданной лицензии. А вид «Antigravity/… (android…)» даёт урезанный каталог из
+  18 моделей без семейств Gemini 4, и `gemini-4-*` на генерации отвечает 404.
+  Идентичность хаба (`antigravity/hub/… (aidev_client; …)`) открывает весь
+  состав подписки (38 моделей, включая Gemini 4 Argon/Neon/Carbon/Hydrogen) и
+  генерацию на них. Проверено перебором: хватает маркера `aidev_client` в скобках.
 * **Лицензия спрашивается GET-ом.** `GET https://aicode.googleapis.com/v1alpha:fetchLicenses`
   отдаёт `{"licenses":[{"userTier":"g1-ultra-tier","tierDisplayName":"Google AI Ultra"}]}`.
   `POST` на тот же путь даёт обычный HTML-404 — на этом легко решить, что ручки нет.
@@ -77,8 +80,9 @@ Gemini API, без ПК-моста, без VPN и без смены регион
   право `serviceusage.services.use` и отвечает `403 Caller does not have required
   permission to use project …`.
 * `v1internal:fetchAvailableModels` не принимает `metadata` (400 «Unknown name
-  metadata»), зато отдаёт каталог моделей аккаунта. Каталог — истина, статический
-  список в приложении только до первого ответа сервера.
+  metadata»), зато отдаёт каталог моделей аккаунта. Каталог — единственная истина:
+  приложение больше не подмешивает статический список, показывает только то, что
+  в подписке, и подписывает раздел именем лицензии («Google AI Ultra», …).
 * Метаданные клиента (`ideType: ANTIGRAVITY`, `pluginType: CLOUD_CODE`,
   `ideVersion: 44.9.1`) нужны обязательно: без них — 403 «caller does not have
   permission», со старой версией — текст «эта версия больше не поддерживается».

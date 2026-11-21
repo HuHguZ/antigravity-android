@@ -107,6 +107,17 @@ class CloudCodeParsingTest {
     }
 
     @Test
+    fun `nothing from the server means no list at all, not stale guesses`() {
+        assertTrue(googleProModelOptions(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `the badge names the actual plan`() {
+        val options = googleProModelOptions(listOf("gemini-4-argon-high"), "Google AI Ultra")
+        assertEquals("Google AI Ultra • подписка аккаунта", options.first().badge)
+    }
+
+    @Test
     fun `a licence is read by tier and display name`() {
         val (tier, name) = parseLicence(JSONObject("""
             {"licenses":[{"userTier":"g1-ultra-tier","tierDisplayName":"Google AI Ultra"}]}
