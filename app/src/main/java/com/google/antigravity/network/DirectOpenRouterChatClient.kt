@@ -38,6 +38,10 @@ internal class DirectOpenRouterChatClient(client: OkHttpClient = OkHttpClient())
             }
             if (json.has("error") && !json.isNull("error")) throw failure(json.optJSONObject("error")?.optInt("code", 0) ?: 0)
             val choice = json.optJSONArray("choices")?.optJSONObject(0)
+            val providerError = choice?.optJSONObject("error")
+            if (providerError != null || choice?.optString("finish_reason") == "error") {
+                throw failure(providerError?.optInt("code", 502) ?: 502)
+            }
             val message = choice?.optJSONObject("message")
                 ?: throw OpenRouterChatFailure(0, "OpenRouter не вернул сообщение модели.")
             val content = message.opt("content")
@@ -50,7 +54,19 @@ internal class DirectOpenRouterChatClient(client: OkHttpClient = OkHttpClient())
             if (text.isEmpty()) throw OpenRouterChatFailure(0, if (choice?.optString("finish_reason") == "length")
                 "Модель исчерпала лимит ответа до готового текста. Сократите запрос или выберите другую модель."
                 else "Модель не вернула текст. Проверьте, что выбрана текстовая модель; для фото и видео используйте генерацию медиа.")
-            OpenRouterChatReply(text, message.optString("reasoning", "").takeUnless { it == "null" }.orEmpty(),
+            val reasoning = message.opt("reasoning") as? String
+            val details = message.optJSONArray("reasoning_details")
+            val readableReasoning = reasoning?.takeIf { it.isNotBlank() && it != "null" } ?: details?.let { parts ->
+                (0 until parts.length()).mapNotNull { index ->
+                    val part = parts.optJSONObject(index) ?: return@mapNotNull null
+                    when (part.optString("type")) {
+                        "reasoning.text" -> part.opt("text") as? String
+                        "reasoning.summary" -> part.opt("summary") as? String
+                        else -> null
+                    }?.takeIf { it.isNotBlank() }
+                }.joinToString("\n")
+            }.orEmpty()
+            OpenRouterChatReply(text, readableReasoning,
                 json.optJSONObject("usage")?.optInt("completion_tokens", 0)?.coerceAtLeast(0) ?: 0)
         }
     }

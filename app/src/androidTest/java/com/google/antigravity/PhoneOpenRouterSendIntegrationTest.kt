@@ -17,7 +17,12 @@ import org.junit.runner.RunWith
 /** Android engine + real backend routing; fixture transport avoids paid requests and private credentials. */
 @RunWith(AndroidJUnit4::class)
 class PhoneOpenRouterSendIntegrationTest {
-    private suspend fun send(code: Int, key: String = "qa-phone-key", model: String = "qa/text"): AntigravityBackendClient.AgentTurnResult {
+    private suspend fun send(
+        code: Int,
+        key: String = "qa-phone-key",
+        model: String = "qa/text",
+        providerFailure: Boolean = false
+    ): AntigravityBackendClient.AgentTurnResult {
         check(Build.HARDWARE in setOf("ranchu", "goldfish")) { "Owned QA emulator only" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val client = AntigravityBackendClient(PhoneResourceController(context), OkHttpClient.Builder().addInterceptor { chain ->
@@ -25,8 +30,10 @@ class PhoneOpenRouterSendIntegrationTest {
             assertEquals("Bearer qa-phone-key", chain.request().header("Authorization"))
             val payload = okio.Buffer(); chain.request().body!!.writeTo(payload)
             assertEquals(model, org.json.JSONObject(payload.readUtf8()).getString("model"))
+            val error = if (providerFailure) ""","finish_reason":"error","error":{"code":502}""" else ""
+            val body = """{"choices":[{"message":{"content":"Телефон получил ответ без ПК.","reasoning":"QA `reasoning`"}$error}]}"""
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("QA")
-                .body("""{"choices":[{"message":{"content":"Телефон получил ответ без ПК."}}]}""".toResponseBody()).build()
+                .body(body.toResponseBody()).build()
         }.build())
         return client.executeAgentTurn("Проверка", false, AgentExecutionTarget.PHONE_LOCAL_RESOURCES,
             model, "qa-send", "QA", emptyList(), emptyList(), "http://127.0.0.1:1", "", key)
@@ -36,6 +43,7 @@ class PhoneOpenRouterSendIntegrationTest {
         val result = send(200)
         assertFalse(result.isError)
         assertEquals("Телефон получил ответ без ПК.", result.responseMarkdown)
+        assertTrue(result.thinkingTrace.contains("QA `reasoning`"))
     }
 
     @Test fun billingFailurePreservesActionableReason() = runBlocking {
@@ -43,6 +51,14 @@ class PhoneOpenRouterSendIntegrationTest {
         catch (failure: OpenRouterChatFailure) {
             assertEquals(402, failure.status)
             assertTrue(failure.message!!.contains("Недостаточно средств"))
+        }
+    }
+
+    @Test fun providerFailureAfterHeadersIsNotReportedAsSuccess() = runBlocking {
+        try { send(200, providerFailure = true); fail("Expected provider failure") }
+        catch (failure: OpenRouterChatFailure) {
+            assertEquals(502, failure.status)
+            assertTrue(failure.message.orEmpty().contains("HTTP 502"))
         }
     }
 

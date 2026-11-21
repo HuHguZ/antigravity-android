@@ -65,6 +65,24 @@ class DirectOpenRouterChatClientTest {
         assertEquals("AB", result.text); assertEquals(0, result.outputTokens)
     }
 
+    @Test fun reportsProviderFailureEvenWhenHttp200ContainsPartialText() = runBlocking {
+        val body = """{"choices":[{"message":{"content":"Partial text"},"finish_reason":"error","error":{"code":502,"message":"qa-key private prompt"}}]}"""
+        try {
+            client(200, body).complete("qa/model", "qa-key", history)
+            fail("Partial text from a failed generation must not be reported as success")
+        } catch (failure: OpenRouterChatFailure) {
+            assertEquals(502, failure.status)
+            assertFalse(failure.message.orEmpty().contains("qa-key"))
+            assertFalse(failure.message.orEmpty().contains("private prompt"))
+        }
+    }
+
+    @Test fun displaysOnlyReadableStructuredReasoningWhenPlainReasoningIsAbsent() = runBlocking {
+        val body = """{"choices":[{"message":{"content":"OK","reasoning":null,"reasoning_details":[{"type":"reasoning.summary","summary":"Summary"},{"type":"reasoning.encrypted","data":"opaque"},{"type":"reasoning.text","text":"Additional detail","signature":"opaque"}]}}]}"""
+        val result = client(200, body).complete("qa/model", "qa-key", history)
+        assertEquals("Summary\nAdditional detail", result.reasoning)
+    }
+
     @Test fun rejectsRedirectWithoutFollowingOrReplaying() = runBlocking {
         var calls = 0
         try {
